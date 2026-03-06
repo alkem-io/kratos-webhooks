@@ -67,7 +67,7 @@ func (s *Service) TransformToNotificationEvent(payload *Payload) UserSignupWelco
 		Email:     payload.Email,
 		Profile: ProfileInfo{
 			DisplayName: payload.DisplayName,
-			URL:         fmt.Sprintf("%s/user/%s", s.platformURL, payload.IdentityID),
+			URL:         fmt.Sprintf("%s/user/me", s.platformURL),
 		},
 		Type: UserType,
 	}
