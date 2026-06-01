@@ -1,15 +1,20 @@
 # Alkemio Kratos Webhooks
 
-A Go HTTP service that receives webhooks from Ory Kratos and bridges them into the Alkemio platform's notification infrastructure. Handles post-verification welcome notifications and login brute-force protection.
+A Go HTTP service that receives webhooks from Ory Kratos and bridges them into the Alkemio platform's notification infrastructure. Handles post-verification welcome notifications, password-change observability, and login brute-force protection.
 
 ## Architecture
 
 ```
 Ory Kratos ──POST──▶ Kratos Webhooks ──publish──▶ RabbitMQ (alkemio-notifications)
-                           │
+                           │              └─────▶ RabbitMQ (alkemio-kratos-events)
                            ├── Redis (idempotency + login rate limiting)
                            └── Structured logging (Zap)
 ```
+
+Password-change events publish to a **dedicated** durable queue
+`alkemio-kratos-events` (consumed by the server via `@nestjs/microservices`),
+kept separate from `alkemio-notifications` so the two consumers do not steal
+each other's messages.
 
 The service follows **fail-open semantics**: webhook responses return HTTP 200 to avoid blocking Kratos flows, regardless of downstream failures. The login backoff endpoints are the exception — they return HTTP 403 when an account or IP is locked out.
 
@@ -29,6 +34,7 @@ internal/
   middleware/                             # Correlation ID, logging, maintenance mode
   webhooks/
     kratos-verification/                 # Post-verification webhook handler
+    kratos-password-changed/             # Post-password-change → broker event
     kratos-login-backoff/                # Login brute-force protection
 manifests/                               # Kubernetes deployment manifests
 ```
@@ -105,6 +111,36 @@ Receives Kratos post-verification payloads. Always returns HTTP 200.
   "message": "optional explanation"
 }
 ```
+
+**POST** `/api/v1/webhooks/kratos/password-changed`
+
+Receives the Kratos `settings.after.password` hook when a user changes their
+password, and publishes a `USER_PASSWORD_CHANGED` event onto the dedicated
+`alkemio-kratos-events` queue for the server to consume. Only `identity_id` is
+required; `observed_at` defaults to publish-time `now()` (UTC) when absent.
+Always returns HTTP 200 (fail-open). No application-layer auth — in-cluster
+trust only (see the handler comment, FR-007).
+
+```json
+// Request
+{
+  "identity_id": "uuid",
+  "flow_id": "uuid",
+  "observed_at": "2026-06-01T10:30:45Z",
+  "client_ip": "203.0.113.7",
+  "user_agent": "Mozilla/5.0"
+}
+
+// Response
+{
+  "status": "success|skipped|error",
+  "message": "optional explanation"
+}
+```
+
+The published broker message follows
+[`../agents-hq/specs/005-kratos-password-changed-queue/contracts/password-changed-event.md`](https://github.com/alkem-io)
+(the cross-repo `USER_PASSWORD_CHANGED` contract).
 
 ### Login Backoff
 
