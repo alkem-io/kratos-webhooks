@@ -78,6 +78,71 @@ paths:
               schema:
                 $ref: '#/components/schemas/MaintenanceResponse'
 
+  /api/v1/webhooks/kratos/password-changed:
+    post:
+      tags:
+        - webhooks
+      summary: Ory Kratos post-password-change webhook
+      description: |
+        Receives the Kratos `settings.after.password` hook when a user changes
+        their password via the self-service settings flow. Publishes a
+        `USER_PASSWORD_CHANGED` event onto the dedicated durable broker queue
+        `alkemio-kratos-events` for the Alkemio server to consume.
+
+        **Trust boundary (FR-007)**: no application-layer authentication. The
+        endpoint inherits the in-cluster trust posture — reachable only via the
+        internal Service DNS name (no public ingress), consistent with the
+        verification and login-backoff webhooks.
+
+        **Important**: This endpoint always returns HTTP 200 to Kratos, even if
+        publishing fails. This ensures the user's settings flow is not blocked.
+      operationId: kratosPasswordChangedWebhook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/KratosPasswordChangedPayload'
+            example:
+              identity_id: "550e8400-e29b-41d4-a716-446655440000"
+              flow_id: "f1a2b3c4-1111-2222-3333-444455556666"
+              observed_at: "2026-06-01T10:30:45Z"
+              client_ip: "203.0.113.7"
+              user_agent: "Mozilla/5.0"
+      responses:
+        '200':
+          description: Webhook received and processed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookResponse'
+              examples:
+                success:
+                  summary: Event published
+                  value:
+                    status: "success"
+                skipped_missing_identity:
+                  summary: Missing required identity_id
+                  value:
+                    status: "skipped"
+                    message: "missing required fields: identity_id"
+                error_publish_failed:
+                  summary: Broker publish failed (fail-open, still 200)
+                  value:
+                    status: "error"
+                    message: "event publish failed"
+        '503':
+          description: Service unavailable (maintenance mode)
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+              description: Seconds until retry is recommended
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MaintenanceResponse'
+
   /api/v1/webhooks/kratos/login-backoff/before-login:
     post:
       tags:
@@ -292,6 +357,37 @@ components:
           type: string
           description: User's first name
           example: "John"
+
+    KratosPasswordChangedPayload:
+      type: object
+      description: |
+        Webhook payload from Ory Kratos after a self-service password change,
+        emitted by the jsonnet body template on the settings.after.password hook.
+      required:
+        - identity_id
+      properties:
+        identity_id:
+          type: string
+          format: uuid
+          description: Kratos identity UUID
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        flow_id:
+          type: string
+          description: Kratos settings flow id (part of the idempotency key)
+          example: "f1a2b3c4-1111-2222-3333-444455556666"
+        observed_at:
+          type: string
+          format: date-time
+          description: When the change was observed (RFC3339). Defaults to publish-time now() (UTC) if absent.
+          example: "2026-06-01T10:30:45Z"
+        client_ip:
+          type: string
+          description: End-user IP, templated from Kratos request_headers
+          example: "203.0.113.7"
+        user_agent:
+          type: string
+          description: End-user user-agent, templated from Kratos request_headers
+          example: "Mozilla/5.0"
 
     WebhookResponse:
       type: object
