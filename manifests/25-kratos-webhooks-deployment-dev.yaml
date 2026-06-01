@@ -66,6 +66,16 @@ spec:
                 configMapKeyRef:
                   name: alkemio-config
                   key: ENDPOINT_CLUSTER
+            - name: KRATOS_INTERNAL_URL
+              value: "http://kratos-public"
+            - name: LOGIN_BACKOFF_MAX_IDENTIFIER_ATTEMPTS
+              value: "10"
+            - name: LOGIN_BACKOFF_MAX_IP_ATTEMPTS
+              value: "20"
+            - name: LOGIN_BACKOFF_IDENTIFIER_LOCKOUT_SECONDS
+              value: "120"
+            - name: LOGIN_BACKOFF_IP_LOCKOUT_SECONDS
+              value: "120"
           livenessProbe:
             httpGet:
               path: /health/live

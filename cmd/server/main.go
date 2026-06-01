@@ -17,6 +17,7 @@ import (
 	"github.com/alkem-io/kratos-webhooks/internal/health"
 	"github.com/alkem-io/kratos-webhooks/internal/middleware"
 	kratosloginbackoff "github.com/alkem-io/kratos-webhooks/internal/webhooks/kratos-login-backoff"
+	kratospasswordchanged "github.com/alkem-io/kratos-webhooks/internal/webhooks/kratos-password-changed"
 	kratosverification "github.com/alkem-io/kratos-webhooks/internal/webhooks/kratos-verification"
 )
 
@@ -63,6 +64,12 @@ func main() {
 	webhookService := kratosverification.NewService(redisClient, rabbitMQClient, cfg.PlatformURL, logger)
 	webhookHandler := kratosverification.NewHandler(webhookService, logger)
 	mux.HandleFunc("POST /api/v1/webhooks/kratos/verification", webhookHandler.HandleVerification)
+
+	// Password-changed webhook: publishes a USER_PASSWORD_CHANGED event onto the
+	// dedicated alkemio-kratos-events broker queue for the server to consume.
+	passwordChangedService := kratospasswordchanged.NewService(rabbitMQClient, logger)
+	passwordChangedHandler := kratospasswordchanged.NewHandler(passwordChangedService, logger)
+	mux.HandleFunc("POST /api/v1/webhooks/kratos/password-changed", passwordChangedHandler.HandlePasswordChanged)
 
 	// Login backoff endpoints
 	// TODO: These webhook endpoints mutate lockout counters and should be restricted to
