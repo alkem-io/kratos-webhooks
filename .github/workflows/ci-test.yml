@@ -1,0 +1,16 @@
+name: CI — Lint & Test
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  ci:
+    uses: alkem-io/github-workflows/.github/workflows/go-ci.yml@v1
+    permissions:
+      contents: read
+    with:
+      openapi-make-target: openapi
+      apispec-version: v0.4.21
