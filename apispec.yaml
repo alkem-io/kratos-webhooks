@@ -1,0 +1,57 @@
+defaults:
+  requestContentType: application/json
+  responseContentType: application/json
+  responseStatus: 200
+info:
+  title: Alkemio Kratos Webhooks API
+  description: |
+    HTTP webhook gateway service that receives webhooks from external systems
+    and publishes notification events to the Alkemio platform.
+  version: 1.0.0
+  contact:
+    name: Alkemio Team
+servers:
+  - url: http://kratos-webhooks:8080
+    description: Internal Kubernetes service
+tags:
+  - name: webhooks
+    description: Webhook endpoints for external systems
+  - name: login-backoff
+    description: Login brute force protection endpoints
+  - name: health
+    description: Health check endpoints
+# Per-operation summary + tags.
+#
+# apispec v0.4.21 cannot derive these from net/http handler code:
+#   * tags    — no code-level mechanism exists; the contract's tag grouping is
+#               restored here.
+#   * summary — apispec extracts doc comments only from free functions, not from
+#               methods (handlers with a receiver), so the handler doc comments
+#               never reach the spec. The summary is therefore sourced here.
+#
+# functionName is the fully-qualified `<importpath>.<Recv>.<Method>` form that
+# apispec matches against internally (operationId in the output is the shortened
+# rendering of the same value).
+#
+# NOTE: `description` is intentionally omitted — Override.description is parsed
+# but never applied by apispec v0.4.21, so per-operation descriptions cannot be
+# reproduced (see PR body / residual-diff report).
+overrides:
+  - functionName: github.com/alkem-io/kratos-webhooks/internal/webhooks/kratos-verification.Handler.HandleVerification
+    summary: Ory Kratos post-verification webhook
+    tags: [webhooks]
+  - functionName: github.com/alkem-io/kratos-webhooks/internal/webhooks/kratos-password-changed.Handler.HandlePasswordChanged
+    summary: Ory Kratos post-password-change webhook
+    tags: [webhooks]
+  - functionName: github.com/alkem-io/kratos-webhooks/internal/webhooks/kratos-login-backoff.Handler.HandleBeforeLogin
+    summary: Check lockout status and increment attempt counters
+    tags: [login-backoff]
+  - functionName: github.com/alkem-io/kratos-webhooks/internal/webhooks/kratos-login-backoff.Handler.HandleAfterLogin
+    summary: Reset attempt counters after successful login
+    tags: [login-backoff]
+  - functionName: github.com/alkem-io/kratos-webhooks/internal/health.Handlers.LiveHandler
+    summary: Liveness probe
+    tags: [health]
+  - functionName: github.com/alkem-io/kratos-webhooks/internal/health.Handlers.ReadyHandler
+    summary: Readiness probe
+    tags: [health]
