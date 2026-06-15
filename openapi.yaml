@@ -1,0 +1,318 @@
+components:
+  schemas:
+    clients.nestEnvelope:
+      properties:
+        data:
+          type: object
+        pattern:
+          type: string
+      required:
+        - pattern
+        - data
+      type: object
+    health.ReadinessResponse:
+      properties:
+        rabbitmq:
+          enum:
+            - connected
+            - disconnected
+          type: string
+        redis:
+          enum:
+            - connected
+            - disconnected
+          type: string
+        status:
+          enum:
+            - ok
+            - degraded
+            - unhealthy
+          type: string
+        timestamp:
+          format: date-time
+          type: string
+      required:
+        - status
+        - redis
+        - rabbitmq
+        - timestamp
+      type: object
+    health.Response:
+      properties:
+        status:
+          enum:
+            - ok
+            - degraded
+            - unhealthy
+          type: string
+        timestamp:
+          format: date-time
+          type: string
+      required:
+        - status
+        - timestamp
+      type: object
+    kratos-login-backoff.AfterLoginRequest:
+      properties:
+        client_ip:
+          type: string
+        email:
+          format: email
+          type: string
+        identity_id:
+          format: uuid
+          type: string
+      type: object
+    kratos-login-backoff.AfterLoginResponse:
+      properties:
+        message:
+          type: string
+        status:
+          enum:
+            - success
+            - skipped
+          type: string
+      required:
+        - status
+      type: object
+    kratos-login-backoff.BeforeLoginAllowedResponse:
+      properties:
+        allowed:
+          type: boolean
+        identifier_attempts:
+          minimum: 0
+          type: integer
+        ip_attempts:
+          minimum: 0
+          type: integer
+      required:
+        - allowed
+        - identifier_attempts
+        - ip_attempts
+      type: object
+    kratos-login-backoff.BeforeLoginBlockedResponse:
+      properties:
+        allowed:
+          type: boolean
+        message:
+          type: string
+        reason:
+          enum:
+            - identifier
+            - ip
+          type: string
+        retry_after_seconds:
+          minimum: 0
+          type: integer
+      required:
+        - allowed
+        - reason
+        - message
+        - retry_after_seconds
+      type: object
+    kratos-login-backoff.BeforeLoginRequest:
+      properties:
+        client_ip:
+          type: string
+        flow_id:
+          format: uuid
+          type: string
+        identifier:
+          format: email
+          type: string
+      type: object
+    kratos-password-changed.Payload:
+      properties:
+        client_ip:
+          type: string
+        flow_id:
+          type: string
+        identity_id:
+          format: uuid
+          type: string
+        observed_at:
+          format: date-time
+          type: string
+        user_agent:
+          type: string
+      required:
+        - identity_id
+      type: object
+    kratos-password-changed.WebhookResponse:
+      properties:
+        message:
+          type: string
+        status:
+          enum:
+            - success
+            - skipped
+            - error
+          type: string
+      required:
+        - status
+      type: object
+    kratos-verification.Payload:
+      properties:
+        display_name:
+          type: string
+        email:
+          format: email
+          type: string
+        first_name:
+          type: string
+        identity_id:
+          format: uuid
+          type: string
+      required:
+        - identity_id
+        - email
+        - display_name
+        - first_name
+      type: object
+    kratos-verification.WebhookResponse:
+      properties:
+        message:
+          type: string
+        status:
+          enum:
+            - success
+            - skipped
+            - error
+          type: string
+      required:
+        - status
+      type: object
+info:
+  contact:
+    name: Alkemio Team
+  description: |
+    HTTP webhook gateway service that receives webhooks from external systems
+    and publishes notification events to the Alkemio platform.
+  license:
+    name: ""
+  title: Alkemio Kratos Webhooks API
+  version: 1.0.0
+openapi: 3.1.1
+paths:
+  /api/v1/webhooks/kratos/login-backoff/after-login:
+    post:
+      operationId: Handler.HandleAfterLogin
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/kratos-login-backoff.AfterLoginRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/kratos-login-backoff.AfterLoginResponse'
+          description: OK
+      summary: Reset attempt counters after successful login
+      tags:
+        - login-backoff
+  /api/v1/webhooks/kratos/login-backoff/before-login:
+    post:
+      operationId: Handler.HandleBeforeLogin
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/kratos-login-backoff.BeforeLoginRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/kratos-login-backoff.BeforeLoginAllowedResponse'
+          description: OK
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/kratos-login-backoff.BeforeLoginBlockedResponse'
+          description: Forbidden
+      summary: Check lockout status and increment attempt counters
+      tags:
+        - login-backoff
+  /api/v1/webhooks/kratos/password-changed:
+    post:
+      operationId: Handler.HandlePasswordChanged
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/kratos-password-changed.Payload'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/kratos-password-changed.WebhookResponse'
+          description: OK
+      summary: Ory Kratos post-password-change webhook
+      tags:
+        - webhooks
+  /api/v1/webhooks/kratos/verification:
+    post:
+      operationId: Handler.HandleVerification
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/kratos-verification.Payload'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/kratos-verification.WebhookResponse'
+          description: OK
+      summary: Ory Kratos post-verification webhook
+      tags:
+        - webhooks
+  /health/live:
+    get:
+      operationId: Handlers.LiveHandler
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/health.Response'
+          description: OK
+      summary: Liveness probe
+      tags:
+        - health
+  /health/ready:
+    get:
+      operationId: Handlers.ReadyHandler
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/health.ReadinessResponse'
+          description: OK
+        "503":
+          content:
+            application/json: {}
+          description: Service Unavailable
+      summary: Readiness probe
+      tags:
+        - health
+servers:
+  - description: Internal Kubernetes service
+    url: http://kratos-webhooks:8080
+tags:
+  - description: Webhook endpoints for external systems
+    name: webhooks
+  - description: Login brute force protection endpoints
+    name: login-backoff
+  - description: Health check endpoints
+    name: health

@@ -12,16 +12,16 @@ import (
 
 // Response is the response for liveness check.
 type Response struct {
-	Status    string `json:"status"`
-	Timestamp string `json:"timestamp"`
+	Status    string `json:"status" validate:"required,oneof=ok degraded unhealthy"`
+	Timestamp string `json:"timestamp" apispec:"format=date-time"`
 }
 
 // ReadinessResponse is the response for readiness check.
 type ReadinessResponse struct {
-	Status    string `json:"status"`
-	Redis     string `json:"redis"`
-	RabbitMQ  string `json:"rabbitmq"`
-	Timestamp string `json:"timestamp"`
+	Status    string `json:"status" validate:"required,oneof=ok degraded unhealthy"`
+	Redis     string `json:"redis" validate:"required,oneof=connected disconnected"`
+	RabbitMQ  string `json:"rabbitmq" validate:"required,oneof=connected disconnected"`
+	Timestamp string `json:"timestamp" apispec:"format=date-time"`
 }
 
 // Handlers holds dependencies for health check handlers.
