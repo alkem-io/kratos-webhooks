@@ -188,14 +188,19 @@ info:
   description: |
     HTTP webhook gateway service that receives webhooks from external systems
     and publishes notification events to the Alkemio platform.
-  license:
-    name: ""
   title: Alkemio Kratos Webhooks API
   version: 1.0.0
 openapi: 3.1.1
 paths:
   /api/v1/webhooks/kratos/login-backoff/after-login:
     post:
+      description: |
+        Called by Kratos after-login webhook after successful password
+        authentication. Resets the failed attempt counters for the provided
+        identifier and client IP.
+
+        Returns HTTP 200 in normal operation (including fail-open reset errors).
+        When global maintenance mode is enabled, the gateway may return HTTP 503.
       operationId: Handler.HandleAfterLogin
       requestBody:
         content:
@@ -215,6 +220,18 @@ paths:
         - login-backoff
   /api/v1/webhooks/kratos/login-backoff/before-login:
     post:
+      description: |
+        Called before each login attempt. Increments the failed attempt counter
+        for the provided identifier and/or client IP, then checks whether either
+        has exceeded the configured threshold.
+
+        If locked out, returns HTTP 403 with lockout details. If allowed, returns
+        HTTP 200 with current attempt counts.
+
+        Fail-open: if Redis is unavailable, returns HTTP 200 (login allowed) and
+        logs a warning. At least one of identifier or client_ip should be
+        provided; if neither is present, the request is skipped (allowed) with a
+        warning.
       operationId: Handler.HandleBeforeLogin
       requestBody:
         content:
@@ -240,6 +257,14 @@ paths:
         - login-backoff
   /api/v1/webhooks/kratos/password-changed:
     post:
+      description: |
+        Receives the Kratos settings.after.password hook when a user changes
+        their password, and publishes a USER_PASSWORD_CHANGED event onto the
+        dedicated alkemio-kratos-events queue for the server to consume.
+
+        Only identity_id is required; observed_at defaults to publish-time now()
+        (UTC) when absent. Always returns HTTP 200 (fail-open) so a downstream
+        failure never blocks the user's Kratos settings flow.
       operationId: Handler.HandlePasswordChanged
       requestBody:
         content:
@@ -259,6 +284,12 @@ paths:
         - webhooks
   /api/v1/webhooks/kratos/verification:
     post:
+      description: |
+        Receives webhook after successful email verification in Ory Kratos.
+        Publishes a UserSignupWelcome notification event to RabbitMQ.
+
+        This endpoint always returns HTTP 200 to Kratos, even if notification
+        processing fails. This ensures the verification flow is not blocked.
       operationId: Handler.HandleVerification
       requestBody:
         content:
@@ -278,6 +309,7 @@ paths:
         - webhooks
   /health/live:
     get:
+      description: Returns 200 if the service is running.
       operationId: Handlers.LiveHandler
       responses:
         "200":
@@ -291,6 +323,9 @@ paths:
         - health
   /health/ready:
     get:
+      description: |
+        Returns 200 if the service is ready to accept traffic. Checks
+        connectivity to Redis and RabbitMQ.
       operationId: Handlers.ReadyHandler
       responses:
         "200":
