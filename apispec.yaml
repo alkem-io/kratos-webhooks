@@ -20,38 +20,81 @@ tags:
     description: Login brute force protection endpoints
   - name: health
     description: Health check endpoints
-# Per-operation summary + tags.
+# Per-operation summary + description + tags.
 #
-# apispec v0.4.21 cannot derive these from net/http handler code:
-#   * tags    — no code-level mechanism exists; the contract's tag grouping is
-#               restored here.
-#   * summary — apispec extracts doc comments only from free functions, not from
-#               methods (handlers with a receiver), so the handler doc comments
-#               never reach the spec. The summary is therefore sourced here.
+# These are set here, in config, rather than derived from handler code:
+#   * tags        — no code-level mechanism exists; the contract's tag grouping
+#                   is restored here.
+#   * summary     — a short, curated operation title.
+#   * description — the operation's prose, ported from the hand-written
+#                   contracts under specs/*/contracts/ (and, for the
+#                   password-changed webhook, the README endpoint reference).
+#
+# apispec v0.4.23 now extracts method doc comments (functions with a receiver)
+# AND applies Override.description — both were unavailable in v0.4.21 (method
+# comments were skipped; Override.description was parsed but never applied).
+# We keep the explicit config-override approach on purpose: the extracted Go
+# doc comments carry implementation notes (FR references, trust-boundary prose)
+# that do not belong in the public API contract, whereas summary + description +
+# tags declared here are clear, deterministic, and reviewable in one place. The
+# override.description set below takes precedence over the extracted comment.
 #
 # functionName is the fully-qualified `<importpath>.<Recv>.<Method>` form that
 # apispec matches against internally (operationId in the output is the shortened
 # rendering of the same value).
-#
-# NOTE: `description` is intentionally omitted — Override.description is parsed
-# but never applied by apispec v0.4.21, so per-operation descriptions cannot be
-# reproduced (see PR body / residual-diff report).
 overrides:
   - functionName: github.com/alkem-io/kratos-webhooks/internal/webhooks/kratos-verification.Handler.HandleVerification
     summary: Ory Kratos post-verification webhook
+    description: |
+      Receives webhook after successful email verification in Ory Kratos.
+      Publishes a UserSignupWelcome notification event to RabbitMQ.
+
+      This endpoint always returns HTTP 200 to Kratos, even if notification
+      processing fails. This ensures the verification flow is not blocked.
     tags: [webhooks]
   - functionName: github.com/alkem-io/kratos-webhooks/internal/webhooks/kratos-password-changed.Handler.HandlePasswordChanged
     summary: Ory Kratos post-password-change webhook
+    description: |
+      Receives the Kratos settings.after.password hook when a user changes
+      their password, and publishes a USER_PASSWORD_CHANGED event onto the
+      dedicated alkemio-kratos-events queue for the server to consume.
+
+      Only identity_id is required; observed_at defaults to publish-time now()
+      (UTC) when absent. Always returns HTTP 200 (fail-open) so a downstream
+      failure never blocks the user's Kratos settings flow.
     tags: [webhooks]
   - functionName: github.com/alkem-io/kratos-webhooks/internal/webhooks/kratos-login-backoff.Handler.HandleBeforeLogin
     summary: Check lockout status and increment attempt counters
+    description: |
+      Called before each login attempt. Increments the failed attempt counter
+      for the provided identifier and/or client IP, then checks whether either
+      has exceeded the configured threshold.
+
+      If locked out, returns HTTP 403 with lockout details. If allowed, returns
+      HTTP 200 with current attempt counts.
+
+      Fail-open: if Redis is unavailable, returns HTTP 200 (login allowed) and
+      logs a warning. At least one of identifier or client_ip should be
+      provided; if neither is present, the request is skipped (allowed) with a
+      warning.
     tags: [login-backoff]
   - functionName: github.com/alkem-io/kratos-webhooks/internal/webhooks/kratos-login-backoff.Handler.HandleAfterLogin
     summary: Reset attempt counters after successful login
+    description: |
+      Called by Kratos after-login webhook after successful password
+      authentication. Resets the failed attempt counters for the provided
+      identifier and client IP.
+
+      Returns HTTP 200 in normal operation (including fail-open reset errors).
+      When global maintenance mode is enabled, the gateway may return HTTP 503.
     tags: [login-backoff]
   - functionName: github.com/alkem-io/kratos-webhooks/internal/health.Handlers.LiveHandler
     summary: Liveness probe
+    description: Returns 200 if the service is running.
     tags: [health]
   - functionName: github.com/alkem-io/kratos-webhooks/internal/health.Handlers.ReadyHandler
     summary: Readiness probe
+    description: |
+      Returns 200 if the service is ready to accept traffic. Checks
+      connectivity to Redis and RabbitMQ.
     tags: [health]
