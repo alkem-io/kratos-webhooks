@@ -13,4 +13,3 @@ jobs:
       contents: read
     with:
       openapi-make-target: openapi
-      apispec-version: v0.4.23
