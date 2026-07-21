@@ -1,4 +1,4 @@
-# Builds the multi-arch (linux/amd64 + linux/arm64) PR image and pushes it to
+# Builds the linux/amd64 PR image and pushes it to
 # GHCR, then reports the image to grab in a footer of the PR description.
 # Same native-runner digest-merge pattern as the release workflow (org-unified,
 # first validated in alkem-io/notifications#525) — no QEMU.
@@ -32,9 +32,6 @@ jobs:
           - platform: linux/amd64
             runner: ubuntu-latest
             pair: linux-amd64
-          - platform: linux/arm64
-            runner: ubuntu-24.04-arm
-            pair: linux-arm64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     permissions:
@@ -126,8 +123,8 @@ jobs:
         # partial digest set.
         run: |
           count=$(ls -1 "${{ runner.temp }}/digests" 2>/dev/null | wc -l)
-          if [ "$count" -ne 2 ]; then
-            echo "::error::expected 2 digest files (amd64 + arm64), found ${count}."
+          if [ "$count" -ne 1 ]; then
+            echo "::error::expected 1 digest file (amd64), found ${count}."
             exit 1
           fi
 
@@ -178,7 +175,7 @@ jobs:
           docker pull $floating
           \`\`\`
 
-          Current build: \`$pinned\` · \`linux/amd64\` + \`linux/arm64\` · index digest \`$digest\`
+          Current build: \`$pinned\` · \`linux/amd64\` · index digest \`$digest\`
           $end"
 
           gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.body // ""' > /tmp/body.md
