@@ -68,12 +68,22 @@ ENTRYPOINT_JSON="$(docker inspect "$IMAGE" --format '{{json .Config.Entrypoint}}
 pass "ENTRYPOINT is [\"/kratos-webhooks\"]"
 
 # --- no shell / no package manager -----------------------------------------
-for bin in /bin/sh /bin/bash /usr/bin/sh sh apk apt apt-get dpkg; do
-  if docker run --rm --entrypoint "$bin" "$IMAGE" >/dev/null 2>&1; then
-    fail "expected '$bin' to be absent/unexecutable, but it ran"
-  fi
-done
-pass "no shell / package manager is executable"
+# Sweep every PATH-shaped directory in the exported rootfs instead of probing
+# a fixed list of names by exit status. Two proven holes in the old loop:
+# (a) a present package manager invoked bare exits non-zero (usage error), so
+#     it read as "absent"; (b) Google's :debug variants put the shell at
+#     /busybox/sh, which no fixed list covered. distroless/static ships these
+#     directories EMPTY (or absent), so ANY entry is a regression. docker
+#     export needs no executable inside the image — essential here, since a
+#     correct static image contains nothing runnable but the service binary.
+CID="$(docker create "$IMAGE")"
+FORBIDDEN="$(docker export "$CID" | tar -t 2>/dev/null \
+  | grep -E '^(bin|sbin|usr/bin|usr/sbin|usr/local/bin|usr/local/sbin|busybox)/.' \
+  | head -50 || true)"
+docker rm "$CID" >/dev/null
+[ -z "$FORBIDDEN" ] ||
+  fail "unexpected entries in PATH directories: $(echo "$FORBIDDEN" | tr '\n' ',')"
+pass "PATH directories are empty (no shell / package manager / any binary)"
 
 # --- the binary is a genuinely static ELF ----------------------------------
 # distroless/static-* ships no libc; a dynamically linked binary would fail at
@@ -83,26 +93,42 @@ CID="$(docker create "$IMAGE")"
 docker cp "$CID:/kratos-webhooks" "$TMP_BIN" >/dev/null
 docker rm "$CID" >/dev/null
 
+# Staticness is the load-bearing premise of the static-* base, so tool absence
+# is FATAL, not a warning: at least one classifier must run and pass.
+LINKAGE_VERIFIED=0
 if command -v file >/dev/null 2>&1; then
   FILE_OUT="$(file -b "$TMP_BIN")"
   echo "BINARY_FILE_TYPE=$FILE_OUT"
   case "$FILE_OUT" in
-    *"statically linked"*) pass "binary is statically linked" ;;
+    *"statically linked"*) pass "binary is statically linked"; LINKAGE_VERIFIED=1 ;;
     *"dynamically linked"*) fail "binary is DYNAMICALLY linked — invalid on distroless/static (no libc): $FILE_OUT" ;;
     *) echo "WARN: could not classify linkage from: $FILE_OUT" ;;
   esac
-else
-  echo "WARN: 'file' not available; skipping ELF linkage classification"
 fi
 
 if command -v ldd >/dev/null 2>&1; then
   LDD_OUT="$(ldd "$TMP_BIN" 2>&1 || true)"
   echo "BINARY_LDD=$LDD_OUT"
   case "$LDD_OUT" in
-    *"not a dynamic executable"*) pass "ldd confirms: not a dynamic executable" ;;
+    *"not a dynamic executable"*) pass "ldd confirms: not a dynamic executable"; LINKAGE_VERIFIED=1 ;;
     *) fail "ldd reported dynamic dependencies: $LDD_OUT" ;;
   esac
 fi
+[ "$LINKAGE_VERIFIED" = 1 ] ||
+  fail "linkage never verified — neither 'file' nor 'ldd' is available on this runner; install one (the static-ELF premise must be asserted, not assumed)"
+
+# --- Go toolchain floor ----------------------------------------------------
+# The builder was moved to Go 1.26 specifically because all 12 fixable HIGH
+# CVEs lived in the compiled binary's Go 1.24 stdlib (EOL, no 1.24.x fixes).
+# Nothing else defends that: a revert to a pinned golang:1.24-alpine builder
+# would pass every other check green and silently reship 12 fixable HIGH.
+# Go embeds its toolchain version in the binary — assert the floor here.
+GO_VER="$(grep -aoE 'go1\.[0-9]+(\.[0-9]+)?' "$TMP_BIN" | sort -uV | tail -1)"
+echo "BINARY_GO_TOOLCHAIN=$GO_VER"
+GO_MINOR="$(echo "$GO_VER" | sed -E 's/go1\.([0-9]+).*/\1/')"
+[ -n "$GO_MINOR" ] && [ "$GO_MINOR" -ge 26 ] ||
+  fail "binary built with $GO_VER — builder must be Go >= 1.26 (Go 1.24 stdlib carries 12 fixable HIGH CVEs with no 1.24.x fixes; see the 036 evidence bundle)"
+pass "binary built with $GO_VER (>= 1.26 toolchain floor)"
 rm -f "$TMP_BIN"; TMP_BIN=""
 
 # --- no floating FROM in the Dockerfile ------------------------------------
