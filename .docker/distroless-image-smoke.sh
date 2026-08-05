@@ -77,10 +77,18 @@ pass "ENTRYPOINT is [\"/kratos-webhooks\"]"
 #     export needs no executable inside the image — essential here, since a
 #     correct static image contains nothing runnable but the service binary.
 CID="$(docker create "$IMAGE")"
-FORBIDDEN="$(docker export "$CID" | tar -t 2>/dev/null \
-  | grep -E '^(bin|sbin|usr/bin|usr/sbin|usr/local/bin|usr/local/sbin|busybox)/.' \
-  | head -50 || true)"
+ROOTFS_LISTING="$(mktemp)"
+# Export to a file first so an export failure is its own, fail-closed error —
+# piping straight into grep would let `|| true` (needed because grep exits 1
+# on "no match", the PASS case) also swallow a broken export and pass on an
+# empty listing.
+docker export "$CID" | tar -t > "$ROOTFS_LISTING" 2>/dev/null ||
+  fail "docker export failed — cannot enumerate the image rootfs"
 docker rm "$CID" >/dev/null
+[ -s "$ROOTFS_LISTING" ] || fail "docker export produced an empty listing"
+FORBIDDEN="$(grep -E '^(bin|sbin|usr/bin|usr/sbin|usr/local/bin|usr/local/sbin|busybox)/.' \
+  "$ROOTFS_LISTING" | head -50 || true)"
+rm -f "$ROOTFS_LISTING"
 [ -z "$FORBIDDEN" ] ||
   fail "unexpected entries in PATH directories: $(echo "$FORBIDDEN" | tr '\n' ',')"
 pass "PATH directories are empty (no shell / package manager / any binary)"
