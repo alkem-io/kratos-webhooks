@@ -231,11 +231,16 @@ fi
 
 # --- digest / size ---------------------------------------------------------
 IMAGE_DIGEST="$(docker inspect "$IMAGE" --format '{{.Id}}')"
-# `docker inspect .Size`, NOT `docker save | wc -c`: on a runner that has just
-# built a multi-arch image, `docker save` streams every architecture in the
-# build cache, inflating the measurement ~3x against a correct image. `.Size`
-# counts only this image's layers, so it is architecture-correct anywhere.
-IMAGE_SIZE_BYTES="$(docker inspect "$IMAGE" --format '{{.Size}}')"
+# Sum `docker history` layer sizes rather than `docker inspect .Size`: on a
+# containerd-snapshotter daemon .Size counts only layers UNIQUE to this image,
+# so the same image measures ~3x smaller locally than on a CI runner using the
+# classic store. The history sum is store-independent.
+IMAGE_SIZE_BYTES="$(docker history --no-trunc --format '{{.Size}}' "$IMAGE" | awk '
+  /^[0-9.]+ *[kMG]?B$/ {
+    v=$0; sub(/ *[kMG]?B$/,"",v); u=$0; sub(/^[0-9.]+ */,"",u);
+    m = (u=="kB")?1000 : (u=="MB")?1000000 : (u=="GB")?1000000000 : 1;
+    total += v*m
+  } END { printf "%d", total }')"
 echo "IMAGE_DIGEST=$IMAGE_DIGEST"
 echo "IMAGE_SIZE_BYTES=$IMAGE_SIZE_BYTES"
 
