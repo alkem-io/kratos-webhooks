@@ -62,7 +62,12 @@ WORKDIR /
 
 COPY --from=builder /kratos-webhooks /kratos-webhooks
 
-USER nonroot:nonroot
+# NUMERIC, not the `nonroot:nonroot` name form. The kubelet cannot resolve a
+# non-numeric image user, so any Pod setting `runAsNonRoot: true` fails with
+# "image has non-numeric user (nonroot), cannot verify user is non-root" and
+# the container never starts. Proven on k8s-hetzner-sandbox during 036
+# verification. 65532 is the UID `nonroot` maps to in distroless.
+USER 65532:65532
 
 EXPOSE 8080
 
