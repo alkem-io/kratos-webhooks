@@ -64,3 +64,28 @@ func assertNoPII(t *testing.T, logs *observer.ObservedLogs, email, ip string) {
 		}
 	}
 }
+
+// Without a hash key the identifier_hash field is omitted, not logged empty.
+func TestIdentifierHashOmittedWithoutKey(t *testing.T) {
+	core, logs := observer.New(zapcore.DebugLevel)
+	cfg := &config.Config{
+		LoginBackoffMaxIdentifierAttempts:    10,
+		LoginBackoffMaxIPAttempts:            20,
+		LoginBackoffIdentifierLockoutSeconds: 120,
+		LoginBackoffIPLockoutSeconds:         120,
+	}
+	svc := kratosloginbackoff.NewServiceWithRedis(
+		&mockRedisHelper{incrementBothResult: [4]int64{1, 120, 1, 120}}, cfg, zap.New(core))
+	svc.CheckAndIncrement(context.Background(),
+		kratosloginbackoff.BeforeLoginRequest{Identifier: "someone@example.org", ClientIP: "203.0.113.77"}, "corr-1")
+	svc.ResetCounters(context.Background(),
+		kratosloginbackoff.AfterLoginRequest{IdentityID: "id-1", Email: "someone@example.org", ClientIP: "203.0.113.77"}, "corr-1")
+	if logs.Len() == 0 {
+		t.Fatal("expected log output")
+	}
+	for _, e := range logs.All() {
+		if _, ok := e.ContextMap()["identifier_hash"]; ok {
+			t.Errorf("%q: identifier_hash present without a key", e.Message)
+		}
+	}
+}

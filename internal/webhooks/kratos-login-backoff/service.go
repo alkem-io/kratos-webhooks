@@ -101,7 +101,7 @@ func (s *Service) incrementBoth(ctx context.Context, identifier, ip, correlation
 		s.logger.Warn("redis error during login backoff check, failing open",
 			zap.Error(err),
 			zap.String("correlation_id", correlationID),
-			zap.String("identifier_hash", s.identifierHash(identifier)),
+			s.identifierHashField(identifier),
 			zap.String("client_ip_prefix", ipPrefix(ip)),
 		)
 		return CheckAndIncrementResult{Allowed: true}
@@ -113,7 +113,7 @@ func (s *Service) incrementBoth(ctx context.Context, identifier, ip, correlation
 	if !idLocked && !ipLocked {
 		s.logger.Info("login attempt allowed",
 			zap.String("correlation_id", correlationID),
-			zap.String("identifier_hash", s.identifierHash(identifier)),
+			s.identifierHashField(identifier),
 			zap.String("client_ip_prefix", ipPrefix(ip)),
 			zap.Int64("identifier_attempts", idCount),
 			zap.Int64("ip_attempts", ipCount),
@@ -139,7 +139,7 @@ func (s *Service) incrementBoth(ctx context.Context, identifier, ip, correlation
 
 	s.logger.Warn("login attempt blocked",
 		zap.String("correlation_id", correlationID),
-		zap.String("identifier_hash", s.identifierHash(identifier)),
+		s.identifierHashField(identifier),
 		zap.String("client_ip_prefix", ipPrefix(ip)),
 		zap.Int64("identifier_attempts", idCount),
 		zap.Int64("ip_attempts", ipCount),
@@ -166,7 +166,7 @@ func (s *Service) incrementIdentifierOnly(ctx context.Context, identifier, corre
 		s.logger.Warn("redis error during identifier backoff check, failing open",
 			zap.Error(err),
 			zap.String("correlation_id", correlationID),
-			zap.String("identifier_hash", s.identifierHash(identifier)),
+			s.identifierHashField(identifier),
 		)
 		return CheckAndIncrementResult{Allowed: true}
 	}
@@ -174,7 +174,7 @@ func (s *Service) incrementIdentifierOnly(ctx context.Context, identifier, corre
 	if count > int64(s.cfg.LoginBackoffMaxIdentifierAttempts) {
 		s.logger.Warn("login attempt blocked",
 			zap.String("correlation_id", correlationID),
-			zap.String("identifier_hash", s.identifierHash(identifier)),
+			s.identifierHashField(identifier),
 			zap.Int64("identifier_attempts", count),
 			zap.Int("identifier_threshold", s.cfg.LoginBackoffMaxIdentifierAttempts),
 			zap.Int64("retry_after_seconds", remaining),
@@ -190,7 +190,7 @@ func (s *Service) incrementIdentifierOnly(ctx context.Context, identifier, corre
 
 	s.logger.Info("login attempt allowed",
 		zap.String("correlation_id", correlationID),
-		zap.String("identifier_hash", s.identifierHash(identifier)),
+		s.identifierHashField(identifier),
 		zap.Int64("identifier_attempts", count),
 		zap.Int("identifier_threshold", s.cfg.LoginBackoffMaxIdentifierAttempts),
 	)
@@ -268,7 +268,7 @@ func (s *Service) ResetCounters(ctx context.Context, req AfterLoginRequest, corr
 			s.logger.Warn("redis error during counter reset, failing open",
 				zap.Error(err),
 				zap.String("correlation_id", correlationID),
-				zap.String("identifier_hash", s.identifierHash(email)),
+				s.identifierHashField(email),
 				zap.String("client_ip_prefix", ipPrefix(ip)),
 			)
 		}
@@ -278,7 +278,7 @@ func (s *Service) ResetCounters(ctx context.Context, req AfterLoginRequest, corr
 			s.logger.Warn("redis error during identifier counter reset, failing open",
 				zap.Error(err),
 				zap.String("correlation_id", correlationID),
-				zap.String("identifier_hash", s.identifierHash(email)),
+				s.identifierHashField(email),
 			)
 		}
 	default:
@@ -295,7 +295,7 @@ func (s *Service) ResetCounters(ctx context.Context, req AfterLoginRequest, corr
 	if !resetFailed {
 		s.logger.Info("login backoff counters reset",
 			zap.String("correlation_id", correlationID),
-			zap.String("identifier_hash", s.identifierHash(email)),
+			s.identifierHashField(email),
 			zap.String("client_ip_prefix", ipPrefix(ip)),
 			zap.String("event", "counters_reset"),
 		)
@@ -310,6 +310,16 @@ func (s *Service) ResetCounters(ctx context.Context, req AfterLoginRequest, corr
 // identifierHash is the log-safe pseudonym of an identifier (see logfields.go).
 func (s *Service) identifierHash(identifier string) string {
 	return identifierHash([]byte(s.cfg.LogIdentifierHashKey), identifier)
+}
+
+// identifierHashField is the identifier_hash log field, omitted entirely when
+// there is no hash (no key configured or empty identifier).
+func (s *Service) identifierHashField(identifier string) zap.Field {
+	hash := s.identifierHash(identifier)
+	if hash == "" {
+		return zap.Skip()
+	}
+	return zap.String("identifier_hash", hash)
 }
 
 // lockoutMessage generates a human-readable lockout message.
