@@ -87,6 +87,7 @@ All configuration is driven by environment variables. See `configs/.env.example`
 | `LOGIN_BACKOFF_MAX_IP_ATTEMPTS` | `20` | Failed login attempts before per-IP lockout |
 | `LOGIN_BACKOFF_IDENTIFIER_LOCKOUT_SECONDS` | `120` | Lockout duration per identifier |
 | `LOGIN_BACKOFF_IP_LOCKOUT_SECONDS` | `120` | Lockout duration per IP |
+| `LOG_IDENTIFIER_HASH_KEY` | _(empty)_ | Secret key for pseudonymising login identifiers in logs (`identifier_hash` = first 16 hex of HMAC-SHA256 over the lower-cased identifier). Empty = identifiers are not logged. Client IPs are only ever logged as a network prefix (`client_ip_prefix`, /24 or /48) |
 
 ## API Endpoints
 

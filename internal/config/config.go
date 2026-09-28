@@ -41,6 +41,10 @@ type Config struct {
 
 	// Kratos internal URL for login proxy
 	KratosInternalURL string
+
+	// Secret key for pseudonymising identifiers in logs (HMAC-SHA256).
+	// Empty = identifiers are not logged at all.
+	LogIdentifierHashKey string
 }
 
 // Load reads configuration from environment variables.
@@ -66,6 +70,8 @@ func Load() (*Config, error) {
 		LoginBackoffIPLockoutSeconds:         getEnvInt("LOGIN_BACKOFF_IP_LOCKOUT_SECONDS", 120),
 
 		KratosInternalURL: resolveKratosURL(),
+
+		LogIdentifierHashKey: os.Getenv("LOG_IDENTIFIER_HASH_KEY"),
 	}
 
 	if err := validateLoginBackoffConfig(cfg); err != nil {

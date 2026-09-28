@@ -77,7 +77,7 @@ func NewLoginProxy(kratosURL string, service *Service, logger *zap.Logger) http.
 		if !result.Allowed {
 			logger.Warn("login proxy blocked request",
 				zap.String("correlation_id", correlationID),
-				zap.String("client_ip", clientIP),
+				zap.String("client_ip_prefix", ipPrefix(clientIP)),
 				zap.String("reason", result.Reason),
 				zap.Int64("retry_after_seconds", result.RetryAfterSeconds),
 			)
