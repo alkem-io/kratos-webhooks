@@ -1,0 +1,80 @@
+# workspace#036-distroless-wave-1 (W1a) — first CI workflow for this repo.
+#
+# Before this, the repo had only deploy workflows (dev/sandbox/test) and the
+# release/PR image builds: nothing ever ran `go test` or `golangci-lint` on a
+# pull request. This adds the missing correctness gate and, alongside it, the
+# runtime-image contract regression (.docker/distroless-image-smoke.sh).
+#
+# Runner choice: `ubuntu-latest`, matching every other workflow in this repo
+# (build-release-docker-hub.yml, build-push-ghcr-pr.yml and the three
+# build-deploy-k8s-*.yml all use GitHub-hosted runners, not `arc-runner-set`).
+# The smoke harness needs a working Docker daemon plus throwaway RabbitMQ and
+# Redis sidecars, which the hosted runner provides directly.
+name: CI
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+    branches: [develop, main]
+
+# Superseded runs on the same ref carry no information.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-lint:
+    name: Build, test, lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.3
+
+      - name: Set up Go
+        uses: actions/setup-go@v6.0.0
+        with:
+          # Tracks the Dockerfile's builder toolchain (golang:1.26-alpine).
+          # Keep these two in step when either moves.
+          go-version: "1.26"
+          cache: true
+
+      - name: Build
+        run: go build -o ./bin/kratos-webhooks ./cmd/server
+
+      - name: Test
+        run: go test -v -race ./...
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v9.0.0
+        with:
+          # .golangci.yml declares `version: "2"`.
+          version: v2.10.1
+          args: ./...
+
+  image-contract:
+    name: Runtime image contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4.1.0
+
+      - name: Build image
+        run: docker build -t alkemio/kratos-webhooks:ci .
+
+      # Asserts: UID 65532 / nonroot, ENTRYPOINT ["/kratos-webhooks"], no shell
+      # or package manager, the shipped binary is a static ELF (required by the
+      # distroless/static base, which ships no libc), every FROM is
+      # digest-pinned, and — functionally — the container boots against
+      # RabbitMQ + Redis and returns HTTP 200 on /health/live and
+      # /health/ready, the two probes the k8s Deployments declare.
+      - name: Distroless image smoke
+        run: bash .docker/distroless-image-smoke.sh alkemio/kratos-webhooks:ci
