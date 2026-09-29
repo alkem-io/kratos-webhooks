@@ -4,8 +4,8 @@ package kratosverification
 // Payload represents the webhook payload from Kratos
 // after successful email verification.
 type Payload struct {
-	IdentityID  string `json:"identity_id"`
-	Email       string `json:"email"`
+	IdentityID  string `json:"identity_id" apispec:"format=uuid"`
+	Email       string `json:"email" apispec:"format=email"`
 	DisplayName string `json:"display_name"`
 	FirstName   string `json:"first_name"`
 }
@@ -42,7 +42,7 @@ type UserSignupWelcomeEvent struct {
 
 // WebhookResponse is the HTTP response to Kratos.
 type WebhookResponse struct {
-	Status  string `json:"status"`
+	Status  string `json:"status" validate:"required,oneof=success skipped error"`
 	Message string `json:"message,omitempty"`
 }
 

@@ -8,16 +8,16 @@ package kratospasswordchanged
 // snake_case to match the Kratos request body.
 type Payload struct {
 	// IdentityID is the Kratos identity UUID (required).
-	IdentityID string `json:"identity_id"`
+	IdentityID string `json:"identity_id" apispec:"format=uuid"`
 	// FlowID is the Kratos settings flow id (optional). Part of the idempotency key.
-	FlowID string `json:"flow_id"`
+	FlowID string `json:"flow_id,omitempty"`
 	// ObservedAt is when the change was observed (optional, RFC3339). Producer
 	// defaults to publish-time now() (UTC) when Kratos omits it.
-	ObservedAt string `json:"observed_at"`
+	ObservedAt string `json:"observed_at,omitempty" apispec:"format=date-time"`
 	// ClientIP is the end-user IP, templated from Kratos request_headers (optional).
-	ClientIP string `json:"client_ip"`
+	ClientIP string `json:"client_ip,omitempty"`
 	// UserAgent is the end-user user-agent, templated from Kratos request_headers (optional).
-	UserAgent string `json:"user_agent"`
+	UserAgent string `json:"user_agent,omitempty"`
 }
 
 // RequestContext carries the end-user request metadata reproduced in the audit record.
@@ -38,7 +38,7 @@ type PasswordChangedEvent struct {
 
 // WebhookResponse is the HTTP response to Kratos.
 type WebhookResponse struct {
-	Status  string `json:"status"`
+	Status  string `json:"status" validate:"required,oneof=success skipped error"`
 	Message string `json:"message,omitempty"`
 }
 

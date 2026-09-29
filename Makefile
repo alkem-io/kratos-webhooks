@@ -1,4 +1,4 @@
-.PHONY: build test lint run clean
+.PHONY: build test lint run clean openapi
 
 BINARY_NAME=kratos-webhooks
 IMAGE_NAME=alkemio/kratos-webhooks
@@ -23,6 +23,9 @@ clean:
 
 tidy:
 	go mod tidy
+
+openapi:
+	apispec --dir . --output openapi.yaml --config apispec.yaml --skip-cgo
 
 docker-build:
 	docker build -t $(IMAGE_NAME):$(VERSION) -t $(IMAGE_NAME):latest .

@@ -25,6 +25,16 @@ func NewHandler(service *Service, logger *zap.Logger) *Handler {
 }
 
 // HandleVerification handles POST /api/v1/webhooks/kratos/verification.
+//
+// It is the Ory Kratos post-verification webhook: it receives the webhook after
+// a successful email verification in Ory Kratos and publishes a
+// UserSignupWelcome notification event to RabbitMQ. The endpoint always returns
+// HTTP 200 to Kratos, even when notification processing fails, so the
+// verification flow is never blocked.
+//
+// The OpenAPI summary/description for this operation are set in apispec.yaml
+// overrides — apispec v0.4.21 does not extract doc comments from methods
+// (functions with a receiver), only from free functions.
 func (h *Handler) HandleVerification(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	correlationID := middleware.GetCorrelationID(ctx)

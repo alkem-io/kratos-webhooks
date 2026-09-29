@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -41,6 +42,10 @@ type Config struct {
 
 	// Kratos internal URL for login proxy
 	KratosInternalURL string
+
+	// Secret key for pseudonymising identifiers in logs (HMAC-SHA256).
+	// Optional: empty or too short = identifiers are not logged at all.
+	LogIdentifierHashKey string
 }
 
 // Load reads configuration from environment variables.
@@ -66,6 +71,10 @@ func Load() (*Config, error) {
 		LoginBackoffIPLockoutSeconds:         getEnvInt("LOGIN_BACKOFF_IP_LOCKOUT_SECONDS", 120),
 
 		KratosInternalURL: resolveKratosURL(),
+
+		// Trimmed: a secret created from a file often ends in a newline, which
+		// would silently change every pseudonym versus other consumers of the key.
+		LogIdentifierHashKey: strings.TrimSpace(getEnv("LOG_IDENTIFIER_HASH_KEY", "")),
 	}
 
 	if err := validateLoginBackoffConfig(cfg); err != nil {
