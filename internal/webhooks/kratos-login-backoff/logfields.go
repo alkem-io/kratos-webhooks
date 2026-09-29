@@ -22,10 +22,10 @@ func normaliseIdentifier(identifier string) string {
 
 // identifierHash returns a keyed pseudonym for an already-normalised
 // identifier: the first 16 hex characters of HMAC-SHA256(key, identifier).
-// Keyed because an unkeyed hash of an email address can be reversed with a
-// list of emails; config.Load refuses to start without a strong key.
+// Without a key the result is empty (field omitted), never an unkeyed hash,
+// since an unkeyed hash of an email address can be reversed with a list of emails.
 func identifierHash(key []byte, identifier string) string {
-	if identifier == "" {
+	if len(key) == 0 || identifier == "" {
 		return ""
 	}
 	mac := hmac.New(sha256.New, key)

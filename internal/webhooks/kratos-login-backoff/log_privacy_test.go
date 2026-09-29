@@ -76,15 +76,40 @@ type observed struct {
 }
 
 func observedService(mock *mockRedisHelper) (*kratosloginbackoff.Service, observed) {
+	return observedServiceWithKey(mock, strings.Repeat("k", 32))
+}
+
+func observedServiceWithKey(mock *mockRedisHelper, key string) (*kratosloginbackoff.Service, observed) {
 	core, logs := observer.New(zapcore.DebugLevel)
 	cfg := &config.Config{
 		LoginBackoffMaxIdentifierAttempts:    10,
 		LoginBackoffMaxIPAttempts:            20,
 		LoginBackoffIdentifierLockoutSeconds: 120,
 		LoginBackoffIPLockoutSeconds:         120,
-		LogIdentifierHashKey:                 "test-key",
+		LogIdentifierHashKey:                 key,
 	}
 	return kratosloginbackoff.NewServiceWithRedis(mock, cfg, zap.New(core)), observed{logs, core}
+}
+
+// Without a usable key the service still runs, warns once, and omits
+// identifier_hmac rather than logging a weak or unkeyed pseudonym.
+func TestIdentifierHmacOmittedWithoutUsableKey(t *testing.T) {
+	for name, k := range map[string]string{"unset": "", "too_short": "short-key"} {
+		t.Run(name, func(t *testing.T) {
+			svc, logs := observedServiceWithKey(&mockRedisHelper{incrementBothResult: [4]int64{1, 120, 1, 120}}, k)
+			if logs.FilterMessageSnippet("LOG_IDENTIFIER_HASH_KEY").Len() != 1 {
+				t.Error("expected one startup warning about the key")
+			}
+			res := svc.CheckAndIncrement(context.Background(),
+				kratosloginbackoff.BeforeLoginRequest{Identifier: "someone@example.org", ClientIP: "203.0.113.77"}, "corr-1")
+			if !res.Allowed {
+				t.Fatal("login must still be handled without a key")
+			}
+			if logs.FilterFieldKey("identifier_hmac").Len() != 0 {
+				t.Error("identifier_hmac logged without a usable key")
+			}
+		})
+	}
 }
 
 // assertNoPII encodes every entry exactly as production does (JSON: message,

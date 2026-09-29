@@ -31,6 +31,10 @@ type Service struct {
 	hashKey     []byte
 }
 
+// minLogIdentifierHashKeyBytes is the shortest key used for identifier_hmac. A
+// shorter key can be brute-forced from logged pseudonyms and a list of emails.
+const minLogIdentifierHashKeyBytes = 32
+
 // NewService creates a new login backoff service using a concrete RedisClient.
 func NewService(redisClient *clients.RedisClient, cfg *config.Config, logger *zap.Logger) *Service {
 	return NewServiceWithRedis(redisClient, cfg, logger)
@@ -38,13 +42,31 @@ func NewService(redisClient *clients.RedisClient, cfg *config.Config, logger *za
 
 // NewServiceWithRedis creates a new login backoff service with the given RedisHelper.
 // This constructor is intended for testing with mock implementations.
+//
+// LOG_IDENTIFIER_HASH_KEY is optional: without a usable key the service still
+// runs and identifier_hmac is omitted from logs (never an unkeyed hash).
 func NewServiceWithRedis(redisClient RedisHelper, cfg *config.Config, logger *zap.Logger) *Service {
 	return &Service{
 		redisClient: redisClient,
 		cfg:         cfg,
 		logger:      logger,
-		hashKey:     []byte(cfg.LogIdentifierHashKey),
+		hashKey:     logHashKey(cfg.LogIdentifierHashKey, logger),
 	}
+}
+
+// logHashKey returns the key for identifier_hmac, or nil (field omitted) when
+// it is unset or too short, with a warning so the gap is visible at startup.
+func logHashKey(key string, logger *zap.Logger) []byte {
+	switch {
+	case key == "":
+		logger.Warn("LOG_IDENTIFIER_HASH_KEY is not set: identifier_hmac is omitted from login-backoff logs")
+		return nil
+	case len(key) < minLogIdentifierHashKeyBytes:
+		logger.Warn("LOG_IDENTIFIER_HASH_KEY is too short and is ignored: identifier_hmac is omitted from login-backoff logs",
+			zap.Int("min_bytes", minLogIdentifierHashKeyBytes))
+		return nil
+	}
+	return []byte(key)
 }
 
 // CheckAndIncrementResult holds the result of a check-and-increment operation.

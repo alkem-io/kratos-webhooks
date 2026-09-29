@@ -24,9 +24,10 @@ func TestIdentifierHash(t *testing.T) {
 	if identifierHash([]byte("other-key"), "someone@example.org") == h {
 		t.Fatal("hash does not depend on the key")
 	}
-	// No identifier: no pseudonym (an HMAC of "" would look like a real one).
-	if identifierHash(key, "") != "" {
-		t.Fatal("expected empty hash without identifier")
+	// No key or no identifier: omit rather than fall back to an unkeyed hash
+	// (an HMAC of "" would also look like a real pseudonym).
+	if identifierHash(nil, "someone@example.org") != "" || identifierHash(key, "") != "" {
+		t.Fatal("expected empty hash without key or identifier")
 	}
 }
 

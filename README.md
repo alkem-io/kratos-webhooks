@@ -87,7 +87,7 @@ All configuration is driven by environment variables. See `configs/.env.example`
 | `LOGIN_BACKOFF_MAX_IP_ATTEMPTS` | `20` | Failed login attempts before per-IP lockout |
 | `LOGIN_BACKOFF_IDENTIFIER_LOCKOUT_SECONDS` | `120` | Lockout duration per identifier |
 | `LOGIN_BACKOFF_IP_LOCKOUT_SECONDS` | `120` | Lockout duration per IP |
-| `LOG_IDENTIFIER_HASH_KEY` | _(required)_ | Secret key (≥ 32 bytes, surrounding whitespace trimmed) for pseudonymising login identifiers in logs: `identifier_hmac` = first 16 hex of HMAC-SHA256 over `lower(trim(identifier))` (Go `strings.ToLower(strings.TrimSpace(x))`). The service refuses to start without it. Raw identifiers and full client IPs are never logged; IPs appear only as a network prefix (`client_ip_prefix`, /24 for IPv4, /32 for IPv6) |
+| `LOG_IDENTIFIER_HASH_KEY` | _(empty)_ | Secret key (≥ 32 bytes, surrounding whitespace trimmed) for pseudonymising login identifiers in logs: `identifier_hmac` = first 16 hex of HMAC-SHA256 over `lower(trim(identifier))` (Go `strings.ToLower(strings.TrimSpace(x))`). Unset or shorter than 32 bytes: the service runs, logs a warning at startup, and omits `identifier_hmac`. Raw identifiers and full client IPs are never logged; IPs appear only as a network prefix (`client_ip_prefix`, /24 for IPv4, /32 for IPv6) |
 
 ## API Endpoints
 
