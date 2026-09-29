@@ -76,6 +76,13 @@ spec:
               value: "120"
             - name: LOGIN_BACKOFF_IP_LOCKOUT_SECONDS
               value: "120"
+            # Keys the identifier pseudonym in logs (identifier_hmac). Required:
+            # the service refuses to start without it.
+            - name: LOG_IDENTIFIER_HASH_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: alkemio-secrets
+                  key: KRATOS_WEBHOOKS_LOG_HASH_KEY
           resources:
             requests:
               cpu: 50m

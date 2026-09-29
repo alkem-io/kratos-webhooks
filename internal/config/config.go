@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -43,7 +44,7 @@ type Config struct {
 	KratosInternalURL string
 
 	// Secret key for pseudonymising identifiers in logs (HMAC-SHA256).
-	// Empty = identifiers are not logged at all.
+	// Required, at least minLogIdentifierHashKeyBytes long.
 	LogIdentifierHashKey string
 }
 
@@ -71,7 +72,9 @@ func Load() (*Config, error) {
 
 		KratosInternalURL: resolveKratosURL(),
 
-		LogIdentifierHashKey: os.Getenv("LOG_IDENTIFIER_HASH_KEY"),
+		// Trimmed: a secret created from a file often ends in a newline, which
+		// would silently change every pseudonym versus other consumers of the key.
+		LogIdentifierHashKey: strings.TrimSpace(getEnv("LOG_IDENTIFIER_HASH_KEY", "")),
 	}
 
 	if err := validateLoginBackoffConfig(cfg); err != nil {
@@ -97,8 +100,16 @@ func validateLoginBackoffConfig(cfg *Config) error {
 	if _, err := url.ParseRequestURI(cfg.KratosInternalURL); err != nil {
 		return fmt.Errorf("invalid KRATOS_INTERNAL_URL: %w", err)
 	}
+	// A short key can be brute-forced from logged pseudonyms and a list of
+	// emails, which would make identifier_hmac as reversible as a plain hash.
+	if len(cfg.LogIdentifierHashKey) < minLogIdentifierHashKeyBytes {
+		return fmt.Errorf("LOG_IDENTIFIER_HASH_KEY must be set and at least %d bytes (generate: openssl rand -base64 32)",
+			minLogIdentifierHashKeyBytes)
+	}
 	return nil
 }
+
+const minLogIdentifierHashKeyBytes = 32
 
 // resolveKratosURL returns the Kratos public API URL.
 // Prefers KRATOS_API_PUBLIC_ENDPOINT (shared configMap key) if set;
