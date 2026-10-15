@@ -303,7 +303,7 @@ func (s *Service) ResetCounters(ctx context.Context, req AfterLoginRequest, corr
 	if !resetFailed {
 		log.Info("login backoff counters reset",
 			zap.String("correlation_id", correlationID),
-			zap.String("event", "counters_reset"),
+			zap.String("action", "counters_reset"),
 		)
 	}
 
