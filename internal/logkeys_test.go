@@ -23,6 +23,10 @@ import (
 //
 // A rejected line is dropped from Elasticsearch silently. Use a different key
 // (for example "outcome" or "action") for string values.
+//
+// The check covers direct zap.<Ctor>("key", …) calls with a literal key, the
+// only form this module uses. It does not see an aliased zap import, a key
+// held in a constant, or the sugared logger's key-value pairs.
 var reservedLogKeys = map[string]string{
 	"event":  "",    // never as a top-level field
 	"status": "Int", // only the HTTP status code
@@ -30,9 +34,10 @@ var reservedLogKeys = map[string]string{
 
 func TestLogFieldsKeepTheIndexMappingTypes(t *testing.T) {
 	fset := token.NewFileSet()
-	err := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return err
+	// The module root, so cmd/ is covered as well as internal/.
+	err := filepath.WalkDir("..", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || !isProductionGoFile(path, d) {
+			return skipFixtures(d, err)
 		}
 		file, err := parser.ParseFile(fset, path, nil, 0)
 		if err != nil {
@@ -56,6 +61,19 @@ func TestLogFieldsKeepTheIndexMappingTypes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+func isProductionGoFile(path string, d fs.DirEntry) bool {
+	return !d.IsDir() && strings.HasSuffix(path, ".go") && !strings.HasSuffix(path, "_test.go")
+}
+
+// skipFixtures passes walk errors through and skips directories whose Go files
+// are not compiled into the service.
+func skipFixtures(d fs.DirEntry, err error) error {
+	if err == nil && d.IsDir() && (d.Name() == "testdata" || d.Name() == "vendor") {
+		return fs.SkipDir
+	}
+	return err
 }
 
 // zapField reports the constructor and literal key of a zap.<Ctor>("key", …)
