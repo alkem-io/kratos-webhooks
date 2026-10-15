@@ -101,7 +101,7 @@ func (h *Handler) HandlePasswordChanged(w http.ResponseWriter, r *http.Request) 
 	h.logger.Info("password-changed webhook processed successfully",
 		zap.String("correlation_id", correlationID),
 		zap.String("identity_id", payload.IdentityID),
-		zap.String("status", StatusSuccess),
+		zap.String("outcome", StatusSuccess),
 	)
 
 	h.respondJSON(w, WebhookResponse{
