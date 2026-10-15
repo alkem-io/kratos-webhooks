@@ -40,25 +40,14 @@ func TestLogFieldsKeepTheIndexMappingTypes(t *testing.T) {
 		}
 		ast.Inspect(file, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
-			if !ok || len(call.Args) == 0 {
-				return true
-			}
-			sel, ok := call.Fun.(*ast.SelectorExpr)
 			if !ok {
 				return true
 			}
-			if pkg, ok := sel.X.(*ast.Ident); !ok || pkg.Name != "zap" {
-				return true
-			}
-			lit, ok := call.Args[0].(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING {
-				return true
-			}
-			key, _ := strconv.Unquote(lit.Value)
-			allowed, reserved := reservedLogKeys[key]
-			if reserved && sel.Sel.Name != allowed {
-				t.Errorf("%s: zap.%s(%q) conflicts with the Elasticsearch mapping of %q",
-					fset.Position(call.Pos()), sel.Sel.Name, key, key)
+			if ctor, key, ok := zapField(call); ok {
+				if allowed, reserved := reservedLogKeys[key]; reserved && ctor != allowed {
+					t.Errorf("%s: zap.%s(%q) conflicts with the Elasticsearch mapping of %q",
+						fset.Position(call.Pos()), ctor, key, key)
+				}
 			}
 			return true
 		})
@@ -67,4 +56,22 @@ func TestLogFieldsKeepTheIndexMappingTypes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+// zapField reports the constructor and literal key of a zap.<Ctor>("key", …)
+// call, such as "String" and "status".
+func zapField(call *ast.CallExpr) (ctor, key string, ok bool) {
+	sel, isSel := call.Fun.(*ast.SelectorExpr)
+	if !isSel || len(call.Args) == 0 {
+		return "", "", false
+	}
+	if pkg, isIdent := sel.X.(*ast.Ident); !isIdent || pkg.Name != "zap" {
+		return "", "", false
+	}
+	lit, isLit := call.Args[0].(*ast.BasicLit)
+	if !isLit || lit.Kind != token.STRING {
+		return "", "", false
+	}
+	key, err := strconv.Unquote(lit.Value)
+	return sel.Sel.Name, key, err == nil
 }
