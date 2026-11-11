@@ -84,9 +84,9 @@ All configuration is driven by environment variables. See `configs/.env.example`
 | `MAINTENANCE_MESSAGE` | `Service under maintenance` | Maintenance response message |
 | `CORRELATION_ID_HEADER` | `X-Request-ID` | HTTP header used for request tracing |
 | `LOGIN_BACKOFF_MAX_IDENTIFIER_ATTEMPTS` | `10` | Failed login attempts before per-identifier lockout |
-| `LOGIN_BACKOFF_MAX_IP_ATTEMPTS` | `20` | Failed login attempts before per-IP lockout |
+| `LOGIN_BACKOFF_MAX_IP_ATTEMPTS` | `20` | Login submissions from one IP inside the window before that IP is locked out. Successful submissions count too (a two-step sign-in is two), and a successful login never resets this counter |
 | `LOGIN_BACKOFF_IDENTIFIER_LOCKOUT_SECONDS` | `120` | Lockout duration per identifier |
-| `LOGIN_BACKOFF_IP_LOCKOUT_SECONDS` | `120` | Lockout duration per IP |
+| `LOGIN_BACKOFF_IP_LOCKOUT_SECONDS` | `120` | Length of the per-IP window: the counter lapses when it ends, and an IP locked out stays locked until then |
 | `LOG_IDENTIFIER_HASH_KEY` | _(empty)_ | Secret key (≥ 32 bytes, surrounding whitespace trimmed) for pseudonymising login identifiers in logs: `identifier_hmac` = first 16 hex of HMAC-SHA256 over `lower(trim(identifier))` (Go `strings.ToLower(strings.TrimSpace(x))`). Unset or shorter than 32 bytes: the service runs, logs a warning at startup, and omits `identifier_hmac`. Raw identifiers and full client IPs are never logged; IPs appear only as a network prefix (`client_ip_prefix`, /24 for IPv4, /32 for IPv6) |
 
 ## API Endpoints
@@ -143,6 +143,20 @@ The published broker message follows
 [`../agents-hq/specs/005-kratos-password-changed-queue/contracts/password-changed-event.md`](https://github.com/alkem-io)
 (the cross-repo `USER_PASSWORD_CHANGED` contract).
 
+**POST** `/api/v1/webhooks/kratos/second-factor-changed?method=<totp|webauthn|lookup_secret>`
+
+Called by the Kratos `settings.after.totp`, `settings.after.webauthn` and
+`settings.after.lookup_secret` hooks when a member enrols or removes a second
+factor. Takes the password-changed request body above; the factor travels in
+the `method` query parameter. Publishes a `USER_SECOND_FACTOR_CHANGED` event —
+the password event's shape plus `"method": "totp|webauthn|lookup_secret"` —
+onto the same `alkemio-kratos-events` queue. A missing or other `method`, invalid
+JSON or a missing `identity_id` is `skipped`; a failed publish is `error`.
+Always returns HTTP 200 (fail-open). In-cluster trust only, like the
+password-changed route. This build must be live on an environment before that
+environment's Kratos values name the route; until then the hooks get a `404`,
+which Kratos ignores.
+
 ### Login Backoff
 
 **POST** `/api/v1/webhooks/kratos/login-backoff/before-login`
@@ -179,7 +193,10 @@ Returns HTTP 403 if locked out:
 
 **POST** `/api/v1/webhooks/kratos/login-backoff/after-login`
 
-Resets attempt counters after a successful login. Always returns HTTP 200.
+Resets the identifier's attempt counter after a successful login. The per-IP
+counter is never reset: it lapses with its window, so a successful login cannot
+reopen its address's budget. `client_ip` is accepted and used only for the
+logged network prefix. Always returns HTTP 200.
 
 ```json
 // Request
@@ -194,7 +211,26 @@ Resets attempt counters after a successful login. Always returns HTTP 200.
 
 **POST** `/self-service/login`
 
-Reverse proxy that intercepts login submissions to Kratos, enabling pre-login backoff checks inline with the login flow.
+Reverse proxy that intercepts login submissions to Kratos, enabling pre-login backoff checks inline with the login flow. Only `POST` submissions are counted.
+
+The address it counts is the first valid entry of `X-Forwarded-For` as the edge
+delivers it, else the connection's remote address — never an inbound
+`True-Client-Ip` or `X-Real-Ip`, which a sender sets freely. It always overwrites
+`True-Client-Ip` toward Kratos with that address (removing it when there is
+none), so the after-login hook sees what was counted. The per-IP bound therefore
+holds only if the edge does not pass a sender's own `X-Forwarded-For` chain
+through.
+
+When the proxy cannot count a submission (Redis error), it reads the body's
+`method`: `password`, `passkey` or `oidc` — a first step — is forwarded
+uncounted, with the warning `redis error during … backoff check, failing open`
+that an environment alerts on. Any other method, a second step
+(`totp`, `webauthn`, `lookup_secret`) or a body with no readable method
+included, is answered as a locked address is: a browser is redirected to
+`/login?lockout=true&retry_after=<LOGIN_BACKOFF_IP_LOCKOUT_SECONDS>`, an API
+client gets `429` with `error.reason` `unavailable`. While that warning fires,
+no member with a second factor completes a sign-in. A request body that cannot
+be read to its end is answered `400`.
 
 ### Health
 
