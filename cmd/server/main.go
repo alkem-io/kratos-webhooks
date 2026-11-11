@@ -70,6 +70,10 @@ func main() {
 	passwordChangedService := kratospasswordchanged.NewService(rabbitMQClient, logger)
 	passwordChangedHandler := kratospasswordchanged.NewHandler(passwordChangedService, logger)
 	mux.HandleFunc("POST /api/v1/webhooks/kratos/password-changed", passwordChangedHandler.HandlePasswordChanged)
+	// Second-factor-changed webhook: publishes USER_SECOND_FACTOR_CHANGED onto the
+	// same queue when a member enrols or removes TOTP, WebAuthn or recovery codes.
+	// In-cluster only, like the password route: no ingress route, no app-layer auth.
+	mux.HandleFunc("POST /api/v1/webhooks/kratos/second-factor-changed", passwordChangedHandler.HandleSecondFactorChanged)
 
 	// Login backoff endpoints
 	// TODO: These webhook endpoints mutate lockout counters and should be restricted to
