@@ -1,6 +1,7 @@
-// Package kratospasswordchanged handles Ory Kratos post-password-change webhooks,
-// publishing a USER_PASSWORD_CHANGED event onto the broker for the Alkemio server
-// to consume. It mirrors the kratos-verification package.
+// Package kratospasswordchanged handles the Ory Kratos settings webhooks for a
+// password change and a second-factor change, publishing a USER_PASSWORD_CHANGED
+// or USER_SECOND_FACTOR_CHANGED event onto the broker for the Alkemio server to
+// consume. It mirrors the kratos-verification package.
 package kratospasswordchanged
 
 // Payload represents the incoming webhook payload from Kratos, emitted by the
@@ -27,12 +28,14 @@ type RequestContext struct {
 }
 
 // PasswordChangedEvent is the broker event payload (the `data` of the NestJS
-// {pattern,data} envelope), matching contracts/password-changed-event.md.
+// {pattern,data} envelope). It carries both USER_PASSWORD_CHANGED and
+// USER_SECOND_FACTOR_CHANGED; Method is set only on the second.
 type PasswordChangedEvent struct {
 	EventType    string         `json:"eventType"`
 	IdentityID   string         `json:"identityId"`
 	ObservedAt   string         `json:"observedAt"`
 	SourceFlowID string         `json:"sourceFlowId,omitempty"`
+	Method       string         `json:"method,omitempty"`
 	Request      RequestContext `json:"request"`
 }
 
@@ -46,6 +49,9 @@ type WebhookResponse struct {
 const (
 	// EventTypeUserPasswordChanged is the broker pattern and data.eventType.
 	EventTypeUserPasswordChanged = "USER_PASSWORD_CHANGED" //nolint:gosec // not a credential
+	// EventTypeUserSecondFactorChanged is published when a member enrols or
+	// removes a second factor in their Kratos settings.
+	EventTypeUserSecondFactorChanged = "USER_SECOND_FACTOR_CHANGED"
 )
 
 // Response status constants.

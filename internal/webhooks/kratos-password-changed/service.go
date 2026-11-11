@@ -18,13 +18,13 @@ type Publisher interface {
 	PublishToQueue(ctx context.Context, queue, pattern string, event any) error
 }
 
-// Service handles the business logic for Kratos password-changed webhooks.
+// Service handles the business logic for Kratos settings webhooks.
 type Service struct {
 	publisher Publisher
 	logger    *zap.Logger
 }
 
-// NewService creates a new password-changed webhook service.
+// NewService creates a new settings webhook service.
 func NewService(publisher Publisher, logger *zap.Logger) *Service {
 	return &Service{
 		publisher: publisher,
@@ -42,7 +42,7 @@ func (e ValidationError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Field, e.Message)
 }
 
-// ValidatePayload validates the incoming Kratos password-changed payload.
+// ValidatePayload validates the incoming Kratos settings payload.
 // Only identity_id is required; all other fields are optional.
 func (s *Service) ValidatePayload(payload *Payload) []ValidationError {
 	var errors []ValidationError
@@ -54,19 +54,21 @@ func (s *Service) ValidatePayload(payload *Payload) []ValidationError {
 	return errors
 }
 
-// TransformToEvent converts a Kratos payload into the broker event. When Kratos
-// omits observed_at, the producer defaults it to publish-time now() in UTC RFC3339.
-func (s *Service) TransformToEvent(payload *Payload) PasswordChangedEvent {
+// TransformToEvent converts a Kratos payload into the broker event of the given
+// type; method is empty for a password change. When Kratos omits observed_at,
+// the producer defaults it to publish-time now() in UTC RFC3339.
+func (s *Service) TransformToEvent(payload *Payload, eventType, method string) PasswordChangedEvent {
 	observedAt := strings.TrimSpace(payload.ObservedAt)
 	if observedAt == "" {
 		observedAt = time.Now().UTC().Format(time.RFC3339)
 	}
 
 	return PasswordChangedEvent{
-		EventType:    EventTypeUserPasswordChanged,
+		EventType:    eventType,
 		IdentityID:   payload.IdentityID,
 		ObservedAt:   observedAt,
 		SourceFlowID: strings.TrimSpace(payload.FlowID),
+		Method:       method,
 		Request: RequestContext{
 			ClientIP:  strings.TrimSpace(payload.ClientIP),
 			UserAgent: strings.TrimSpace(payload.UserAgent),
@@ -74,21 +76,22 @@ func (s *Service) TransformToEvent(payload *Payload) PasswordChangedEvent {
 	}
 }
 
-// PublishEvent publishes the password-changed event to the dedicated
-// alkemio-kratos-events queue. Returns error on failure, but the caller must
-// still return HTTP 200 to Kratos (fail-open semantics).
+// PublishEvent publishes the event to the dedicated alkemio-kratos-events queue,
+// under its event type as the pattern. Returns error on failure, but the caller
+// must still return HTTP 200 to Kratos (fail-open semantics).
 func (s *Service) PublishEvent(ctx context.Context, event PasswordChangedEvent, correlationID string) error {
-	err := s.publisher.PublishToQueue(ctx, clients.KratosEventsQueueName, EventTypeUserPasswordChanged, event)
+	err := s.publisher.PublishToQueue(ctx, clients.KratosEventsQueueName, event.EventType, event)
 	if err != nil {
-		s.logger.Warn("failed to publish password-changed event",
+		s.logger.Warn("failed to publish kratos settings event",
 			zap.Error(err),
 			zap.String("correlation_id", correlationID),
 			zap.String("identity_id", event.IdentityID),
+			zap.String("event_type", event.EventType),
 		)
 		return err
 	}
 
-	s.logger.Info("password-changed event published",
+	s.logger.Info("kratos settings event published",
 		zap.String("correlation_id", correlationID),
 		zap.String("identity_id", event.IdentityID),
 		zap.String("event_type", event.EventType),

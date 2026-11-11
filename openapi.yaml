@@ -196,8 +196,8 @@ paths:
     post:
       description: |
         Called by Kratos after-login webhook after successful password
-        authentication. Resets the failed attempt counters for the provided
-        identifier and client IP.
+        authentication. Resets the failed attempt counter for the provided
+        identifier. The per-IP counter is never reset; it lapses with its window.
 
         Returns HTTP 200 in normal operation (including fail-open reset errors).
         When global maintenance mode is enabled, the gateway may return HTTP 503.
@@ -280,6 +280,40 @@ paths:
                 $ref: '#/components/schemas/kratos-password-changed.WebhookResponse'
           description: OK
       summary: Ory Kratos post-password-change webhook
+      tags:
+        - webhooks
+  /api/v1/webhooks/kratos/second-factor-changed:
+    post:
+      description: |
+        Receives the Kratos settings.after.{totp,webauthn,lookup_secret} hooks
+        when a user enrols or removes a second factor, and publishes a
+        USER_SECOND_FACTOR_CHANGED event (the password event's shape plus
+        `method`) onto the dedicated alkemio-kratos-events queue.
+
+        The factor travels in the `method` query parameter (totp, webauthn or
+        lookup_secret); any other value, or none, is skipped. The body is the
+        password-changed webhook's. Always returns HTTP 200 (fail-open) so a
+        downstream failure never blocks the user's Kratos settings flow.
+      operationId: Handler.HandleSecondFactorChanged
+      parameters:
+        - in: query
+          name: method
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/kratos-password-changed.Payload'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/kratos-password-changed.WebhookResponse'
+          description: OK
+      summary: Ory Kratos post-second-factor-change webhook
       tags:
         - webhooks
   /api/v1/webhooks/kratos/verification:
