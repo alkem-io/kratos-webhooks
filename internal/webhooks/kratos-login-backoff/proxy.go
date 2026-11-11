@@ -71,12 +71,8 @@ func NewLoginProxy(kratosURL string, service *Service, logger *zap.Logger) http.
 
 		// Only a first step goes through uncounted: a second step (or a body
 		// whose method could not be read) is refused rather than guessed at
-		// without a bound.
+		// without a bound. The block below logs it with reason "unavailable".
 		if result.Uncounted && !isFirstStep(method) {
-			logger.Warn("login proxy refused a submission it could not count",
-				zap.String("correlation_id", correlationID),
-				zap.String("client_ip_prefix", ipPrefix(clientIP)),
-			)
 			result = CheckAndIncrementResult{
 				Reason:            "unavailable",
 				Message:           "Sign-in is temporarily unavailable. Try again shortly.",
