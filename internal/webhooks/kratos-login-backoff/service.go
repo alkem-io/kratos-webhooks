@@ -19,8 +19,10 @@ type RedisHelper interface {
 	IncrementIdentifierAttempt(ctx context.Context, identifier string, ttlSeconds int) (int64, int64, error)
 	// IncrementIPAttempt atomically increments the IP counter only.
 	IncrementIPAttempt(ctx context.Context, ip string, ttlSeconds int) (int64, int64, error)
-	// ResetLoginAttempts deletes both identifier and IP counter keys.
-	ResetLoginAttempts(ctx context.Context, identifier, ip string) error
+	// ResetLoginAttempts deletes the identifier counter. A per-IP counter is
+	// never deleted: it lapses with its window, so a successful login cannot
+	// reopen its address's budget for further guesses at a second step.
+	ResetLoginAttempts(ctx context.Context, identifier string) error
 }
 
 // Service handles the business logic for login backoff.
@@ -253,14 +255,14 @@ func (s *Service) incrementIPOnly(ctx context.Context, log *zap.Logger, ip, corr
 	}
 }
 
-// ResetCounters resets login attempt counters after a successful login.
-// Fails open on errors.
+// ResetCounters resets the identifier's attempt counter after a successful
+// login; the per-IP counter is left to lapse with its window. Fails open on
+// errors.
 func (s *Service) ResetCounters(ctx context.Context, req AfterLoginRequest, correlationID string) AfterLoginResponse {
 	email := normaliseIdentifier(req.Email)
-	ip := strings.TrimSpace(req.ClientIP)
 
-	if email == "" && ip == "" {
-		s.logger.Warn("after-login request with no email or IP, skipping reset",
+	if email == "" {
+		s.logger.Warn("after-login request with no email, skipping reset",
 			zap.String("correlation_id", correlationID),
 			zap.String("identity_id", req.IdentityID),
 		)
@@ -270,37 +272,14 @@ func (s *Service) ResetCounters(ctx context.Context, req AfterLoginRequest, corr
 		}
 	}
 
-	log := s.logger.With(s.subjectFields(email, ip)...)
+	log := s.logger.With(s.subjectFields(email, strings.TrimSpace(req.ClientIP))...)
 
-	var resetFailed bool
-	switch {
-	case email != "" && ip != "":
-		if err := s.redisClient.ResetLoginAttempts(ctx, email, ip); err != nil {
-			resetFailed = true
-			log.Warn("redis error during counter reset, failing open",
-				zap.Error(err),
-				zap.String("correlation_id", correlationID),
-			)
-		}
-	case email != "":
-		if err := s.redisClient.ResetLoginAttempts(ctx, email, ""); err != nil {
-			resetFailed = true
-			log.Warn("redis error during identifier counter reset, failing open",
-				zap.Error(err),
-				zap.String("correlation_id", correlationID),
-			)
-		}
-	default:
-		if err := s.redisClient.ResetLoginAttempts(ctx, "", ip); err != nil {
-			resetFailed = true
-			log.Warn("redis error during IP counter reset, failing open",
-				zap.Error(err),
-				zap.String("correlation_id", correlationID),
-			)
-		}
-	}
-
-	if !resetFailed {
+	if err := s.redisClient.ResetLoginAttempts(ctx, email); err != nil {
+		log.Warn("redis error during identifier counter reset, failing open",
+			zap.Error(err),
+			zap.String("correlation_id", correlationID),
+		)
+	} else {
 		log.Info("login backoff counters reset",
 			zap.String("correlation_id", correlationID),
 			zap.String("action", "counters_reset"),
