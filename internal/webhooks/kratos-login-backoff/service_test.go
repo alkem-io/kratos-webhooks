@@ -22,7 +22,8 @@ type mockRedisHelper struct {
 	incrementIPResult [2]int64
 	incrementIPErr    error
 
-	resetErr error
+	resetErr   error
+	resetCalls []string
 }
 
 func (m *mockRedisHelper) IncrementLoginAttempts(_ context.Context, _, _ string, _, _ int) (int64, int64, int64, int64, error) {
@@ -46,7 +47,8 @@ func (m *mockRedisHelper) IncrementIPAttempt(_ context.Context, _ string, _ int)
 	return m.incrementIPResult[0], m.incrementIPResult[1], nil
 }
 
-func (m *mockRedisHelper) ResetLoginAttempts(_ context.Context, _, _ string) error {
+func (m *mockRedisHelper) ResetLoginAttempts(_ context.Context, identifier string) error {
+	m.resetCalls = append(m.resetCalls, identifier)
 	return m.resetErr
 }
 
@@ -153,12 +155,15 @@ func TestCheckAndIncrement_LockoutPrecedence_IdentifierLonger(t *testing.T) {
 	}
 }
 
-func TestResetCounters_ClearsBothKeys(t *testing.T) {
+// A successful login clears the identifier's counter and never the per-IP one:
+// the IP counter lapses with its window, so a login cannot reopen its address's
+// budget for further second-step guesses.
+func TestResetCounters_ClearsIdentifierOnly(t *testing.T) {
 	mock := &mockRedisHelper{}
 	svc := newTestService(t, mock)
 
 	resp := svc.ResetCounters(context.Background(), kratosloginbackoff.AfterLoginRequest{
-		Email:    "user@example.com",
+		Email:    "User@Example.com",
 		ClientIP: "192.168.1.1",
 	}, "test-corr-id")
 
@@ -167,6 +172,25 @@ func TestResetCounters_ClearsBothKeys(t *testing.T) {
 	}
 	if resp.Message != "counters reset" {
 		t.Errorf("expected message='counters reset', got %s", resp.Message)
+	}
+	if len(mock.resetCalls) != 1 || mock.resetCalls[0] != "user@example.com" {
+		t.Errorf("expected one reset for the normalised identifier, got %q", mock.resetCalls)
+	}
+}
+
+func TestResetCounters_IPOnly_Skipped(t *testing.T) {
+	mock := &mockRedisHelper{}
+	svc := newTestService(t, mock)
+
+	resp := svc.ResetCounters(context.Background(), kratosloginbackoff.AfterLoginRequest{
+		ClientIP: "192.168.1.1",
+	}, "test-corr-id")
+
+	if resp.Status != "skipped" {
+		t.Errorf("expected status=skipped, got %s", resp.Status)
+	}
+	if len(mock.resetCalls) != 0 {
+		t.Errorf("expected no reset call, got %q", mock.resetCalls)
 	}
 }
 
