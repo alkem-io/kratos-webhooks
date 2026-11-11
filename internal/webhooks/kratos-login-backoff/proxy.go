@@ -104,9 +104,12 @@ func NewLoginProxy(kratosURL string, service *Service, logger *zap.Logger) http.
 		}
 
 		// Set True-Client-Ip so Kratos after-login webhooks can access it via ctx.request_headers.
-		// Kratos v1.3.1 has a hardcoded header allowlist; True-Client-Ip is on it but X-Forwarded-For is not.
+		// Kratos has a hardcoded header allowlist; True-Client-Ip is on it but X-Forwarded-For is not.
+		// The inbound value is never trusted: Kratos always sees the address that was counted.
 		if clientIP != "" {
 			r.Header.Set("True-Client-Ip", clientIP)
+		} else {
+			r.Header.Del("True-Client-Ip")
 		}
 
 		// Restore body and proxy to Kratos
@@ -151,18 +154,12 @@ func isBrowserRequest(r *http.Request) bool {
 	return strings.Contains(accept, "text/html")
 }
 
-// extractClientIP gets the client IP from headers or RemoteAddr.
+// extractClientIP gets the client IP from X-Forwarded-For as the edge delivers
+// it, else from RemoteAddr. True-Client-Ip and X-Real-Ip are never read: a
+// sender sets them freely, and the per-IP counter must not follow them.
 // All candidate IPs are validated with net.ParseIP to ensure well-formed Redis keys.
 func extractClientIP(r *http.Request) string {
-	if ip := firstValidIP(r.Header.Get("True-Client-Ip")); ip != "" {
-		return ip
-	}
-
 	if ip := firstValidIP(r.Header.Get("X-Forwarded-For")); ip != "" {
-		return ip
-	}
-
-	if ip := firstValidIP(r.Header.Get("X-Real-Ip")); ip != "" {
 		return ip
 	}
 

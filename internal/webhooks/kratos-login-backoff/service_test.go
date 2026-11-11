@@ -24,9 +24,13 @@ type mockRedisHelper struct {
 
 	resetErr   error
 	resetCalls []string
+
+	// countedIPs records the address of every per-IP increment.
+	countedIPs []string
 }
 
-func (m *mockRedisHelper) IncrementLoginAttempts(_ context.Context, _, _ string, _, _ int) (int64, int64, int64, int64, error) {
+func (m *mockRedisHelper) IncrementLoginAttempts(_ context.Context, _, ip string, _, _ int) (int64, int64, int64, int64, error) {
+	m.countedIPs = append(m.countedIPs, ip)
 	if m.incrementBothErr != nil {
 		return 0, 0, 0, 0, m.incrementBothErr
 	}
@@ -40,7 +44,8 @@ func (m *mockRedisHelper) IncrementIdentifierAttempt(_ context.Context, _ string
 	return m.incrementIDResult[0], m.incrementIDResult[1], nil
 }
 
-func (m *mockRedisHelper) IncrementIPAttempt(_ context.Context, _ string, _ int) (int64, int64, error) {
+func (m *mockRedisHelper) IncrementIPAttempt(_ context.Context, ip string, _ int) (int64, int64, error) {
+	m.countedIPs = append(m.countedIPs, ip)
 	if m.incrementIPErr != nil {
 		return 0, 0, m.incrementIPErr
 	}
