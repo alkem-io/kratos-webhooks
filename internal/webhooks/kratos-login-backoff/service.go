@@ -74,6 +74,9 @@ func logHashKey(key string, logger *zap.Logger) []byte {
 // CheckAndIncrementResult holds the result of a check-and-increment operation.
 type CheckAndIncrementResult struct {
 	Allowed bool
+	// Uncounted marks an allowed submission that was not counted;
+	// RetryAfterSeconds then holds the IP window, for the proxy to quote.
+	Uncounted bool
 	// Fields populated when allowed
 	IdentifierAttempts int64
 	IPAttempts         int64
@@ -83,9 +86,21 @@ type CheckAndIncrementResult struct {
 	RetryAfterSeconds int64
 }
 
+// uncounted is the result for a submission let through without being counted.
+func (s *Service) uncounted() CheckAndIncrementResult {
+	return CheckAndIncrementResult{
+		Allowed:           true,
+		Uncounted:         true,
+		RetryAfterSeconds: int64(s.cfg.LoginBackoffIPLockoutSeconds),
+	}
+}
+
 // CheckAndIncrement checks and increments login attempt counters.
 // Returns allowed=true if under threshold, or blocked details if over threshold.
-// Fails open on Redis errors (returns allowed=true).
+// Fails open on Redis errors and when there is nothing to count on: the result
+// is allowed and Uncounted. The login proxy acts on Uncounted by refusing any
+// submission that is not a first step, so a second step is never guessed at
+// unbounded while the counter store is down.
 func (s *Service) CheckAndIncrement(ctx context.Context, req BeforeLoginRequest, correlationID string) CheckAndIncrementResult {
 	identifier := normaliseIdentifier(req.Identifier)
 	ip := strings.TrimSpace(req.ClientIP)
@@ -96,7 +111,7 @@ func (s *Service) CheckAndIncrement(ctx context.Context, req BeforeLoginRequest,
 			zap.String("correlation_id", correlationID),
 			zap.String("flow_id", req.FlowID),
 		)
-		return CheckAndIncrementResult{Allowed: true}
+		return s.uncounted()
 	}
 
 	log := s.logger.With(s.subjectFields(identifier, ip)...)
@@ -126,7 +141,7 @@ func (s *Service) incrementBoth(ctx context.Context, log *zap.Logger, identifier
 			zap.Error(err),
 			zap.String("correlation_id", correlationID),
 		)
-		return CheckAndIncrementResult{Allowed: true}
+		return s.uncounted()
 	}
 
 	idLocked := idCount > int64(s.cfg.LoginBackoffMaxIdentifierAttempts)
@@ -185,7 +200,7 @@ func (s *Service) incrementIdentifierOnly(ctx context.Context, log *zap.Logger, 
 			zap.Error(err),
 			zap.String("correlation_id", correlationID),
 		)
-		return CheckAndIncrementResult{Allowed: true}
+		return s.uncounted()
 	}
 
 	if count > int64(s.cfg.LoginBackoffMaxIdentifierAttempts) {
@@ -225,7 +240,7 @@ func (s *Service) incrementIPOnly(ctx context.Context, log *zap.Logger, ip, corr
 			zap.Error(err),
 			zap.String("correlation_id", correlationID),
 		)
-		return CheckAndIncrementResult{Allowed: true}
+		return s.uncounted()
 	}
 
 	if count > int64(s.cfg.LoginBackoffMaxIPAttempts) {

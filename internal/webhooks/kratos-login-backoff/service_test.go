@@ -215,6 +215,52 @@ func TestCheckAndIncrement_FailOpenOnRedisError(t *testing.T) {
 	}
 }
 
+// Every arm that lets a submission through without counting it says so, and
+// quotes the IP window as the wait.
+func TestCheckAndIncrement_UncountedArms(t *testing.T) {
+	redisErr := errors.New("redis connection refused")
+	cases := map[string]kratosloginbackoff.BeforeLoginRequest{
+		"both":            {Identifier: "user@example.com", ClientIP: "192.168.1.1"},
+		"identifier_only": {Identifier: "user@example.com"},
+		"ip_only":         {ClientIP: "192.168.1.1"},
+		"neither":         {},
+	}
+	for name, req := range cases {
+		t.Run(name, func(t *testing.T) {
+			mock := &mockRedisHelper{incrementBothErr: redisErr, incrementIDErr: redisErr, incrementIPErr: redisErr}
+			cfg := &config.Config{
+				LoginBackoffMaxIdentifierAttempts:    10,
+				LoginBackoffMaxIPAttempts:            20,
+				LoginBackoffIdentifierLockoutSeconds: 120,
+				LoginBackoffIPLockoutSeconds:         300,
+			}
+			svc := kratosloginbackoff.NewServiceWithRedis(mock, cfg, zap.NewNop())
+
+			result := svc.CheckAndIncrement(context.Background(), req, "test-corr-id")
+
+			if !result.Allowed || !result.Uncounted {
+				t.Errorf("want allowed and uncounted, got %+v", result)
+			}
+			if result.RetryAfterSeconds != 300 {
+				t.Errorf("want retry_after = the IP window (300), got %d", result.RetryAfterSeconds)
+			}
+		})
+	}
+}
+
+func TestCheckAndIncrement_CountedIsNotUncounted(t *testing.T) {
+	svc := newTestService(t, &mockRedisHelper{incrementBothResult: [4]int64{1, 120, 1, 120}})
+
+	result := svc.CheckAndIncrement(context.Background(), kratosloginbackoff.BeforeLoginRequest{
+		Identifier: "user@example.com",
+		ClientIP:   "192.168.1.1",
+	}, "test-corr-id")
+
+	if !result.Allowed || result.Uncounted {
+		t.Errorf("want allowed and counted, got %+v", result)
+	}
+}
+
 func TestCheckAndIncrement_IdentifierOnly(t *testing.T) {
 	mock := &mockRedisHelper{
 		incrementIDResult: [2]int64{3, 118},
