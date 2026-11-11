@@ -1,6 +1,8 @@
 package kratosloginbackoff_test
 
 import (
+	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -132,5 +134,98 @@ func TestLoginProxy_GetIsForwardedUncounted(t *testing.T) {
 	}
 	if len(mock.countedIPs) != 0 {
 		t.Errorf("want no count for a GET, got %q", mock.countedIPs)
+	}
+}
+
+func failingMock() *mockRedisHelper {
+	err := errors.New("redis: connection refused")
+	return &mockRedisHelper{incrementBothErr: err, incrementIDErr: err, incrementIPErr: err}
+}
+
+// While the counter store fails, a submission the proxy did not count is
+// forwarded only when it is a first step; anything else, a second step
+// included, is answered as a locked address is.
+func TestLoginProxy_UncountedSecondStepIsRefused(t *testing.T) {
+	refused := map[string][2]string{
+		"totp":          {`{"method":"totp","totp_code":"000000"}`, "application/json"},
+		"lookup_secret": {`{"method":"lookup_secret","lookup_secret":"abcd"}`, "application/json"},
+		"webauthn":      {`{"method":"webauthn","webauthn_login":"{}"}`, "application/json"},
+		"form totp":     {"method=totp&totp_code=000000", "application/x-www-form-urlencoded"},
+		"no method":     {`{"totp_code":"000000"}`, "application/json"},
+		"unparseable":   {"\x00not a body", "text/plain"},
+	}
+	for name, c := range refused {
+		t.Run(name+"/api", func(t *testing.T) {
+			proxy, up := newProxy(t, failingMock())
+			rec := serve(proxy, loginPost(c[0], c[1], nil))
+			if rec.Code != http.StatusTooManyRequests {
+				t.Fatalf("want 429, got %d", rec.Code)
+			}
+			var resp struct {
+				Error struct {
+					Reason string `json:"reason"`
+				} `json:"error"`
+			}
+			if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if resp.Error.Reason != "unavailable" {
+				t.Errorf("want reason unavailable, got %q", resp.Error.Reason)
+			}
+			if up.requests != 0 {
+				t.Errorf("want nothing forwarded, upstream saw %d", up.requests)
+			}
+		})
+		t.Run(name+"/browser", func(t *testing.T) {
+			proxy, up := newProxy(t, failingMock())
+			rec := serve(proxy, loginPost(c[0], c[1], map[string]string{"Accept": "text/html"}))
+			if rec.Code != http.StatusSeeOther {
+				t.Fatalf("want 303, got %d", rec.Code)
+			}
+			if loc := rec.Header().Get("Location"); loc != "/login?lockout=true&retry_after=120" {
+				t.Errorf("want redirect quoting the IP window, got %q", loc)
+			}
+			if up.requests != 0 {
+				t.Errorf("want nothing forwarded, upstream saw %d", up.requests)
+			}
+		})
+	}
+}
+
+func TestLoginProxy_UncountedFirstStepIsForwarded(t *testing.T) {
+	for _, body := range []string{
+		passwordBody,
+		`{"method":"passkey","passkey_login":"{}"}`,
+		`{"method":"oidc","provider":"x"}`,
+	} {
+		proxy, up := newProxy(t, failingMock())
+		serve(proxy, loginPost(body, "application/json", nil))
+		if up.requests != 1 || up.bodies[0] != body {
+			t.Errorf("want %s forwarded intact, upstream saw %q", body, up.bodies)
+		}
+	}
+}
+
+// The refusal is tied to "not counted", not to the method.
+func TestLoginProxy_CountedSecondStepIsForwarded(t *testing.T) {
+	proxy, up := newProxy(t, allowedMock())
+	serve(proxy, loginPost(`{"method":"totp","totp_code":"000000"}`, "application/json", nil))
+	if up.requests != 1 {
+		t.Errorf("want the counted second step forwarded, upstream saw %d", up.requests)
+	}
+}
+
+type failingReader struct{}
+
+func (failingReader) Read([]byte) (int, error) { return 0, errors.New("connection reset") }
+
+func TestLoginProxy_UnreadableBodyIsRejected(t *testing.T) {
+	proxy, up := newProxy(t, allowedMock())
+	rec := serve(proxy, httptest.NewRequest(http.MethodPost, "/self-service/login?flow=f", failingReader{}))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("want 400, got %d", rec.Code)
+	}
+	if up.requests != 0 {
+		t.Errorf("want nothing forwarded, upstream saw %d", up.requests)
 	}
 }

@@ -53,26 +53,36 @@ func NewLoginProxy(kratosURL string, service *Service, logger *zap.Logger) http.
 				http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
 				return
 			}
-			logger.Warn("failed to read login request body, proxying without backoff check",
+			logger.Warn("failed to read login request body, rejecting it",
 				zap.Error(err),
 				zap.String("correlation_id", correlationID),
 			)
-			r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-			proxy.ServeHTTP(w, r) //nolint:gosec // proxy target is from trusted config
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 			return
 		}
 
-		// Extract identifier from the body
-		identifier := extractIdentifier(bodyBytes, r.Header.Get("Content-Type"))
-
-		// Extract client IP
+		identifier, method := extractLoginBody(bodyBytes, r.Header.Get("Content-Type"))
 		clientIP := extractClientIP(r)
 
-		// Check backoff
 		result := service.CheckAndIncrement(r.Context(), BeforeLoginRequest{
 			Identifier: identifier,
 			ClientIP:   clientIP,
 		}, correlationID)
+
+		// Only a first step goes through uncounted: a second step (or a body
+		// whose method could not be read) is refused rather than guessed at
+		// without a bound.
+		if result.Uncounted && !isFirstStep(method) {
+			logger.Warn("login proxy refused a submission it could not count",
+				zap.String("correlation_id", correlationID),
+				zap.String("client_ip_prefix", ipPrefix(clientIP)),
+			)
+			result = CheckAndIncrementResult{
+				Reason:            "unavailable",
+				Message:           "Sign-in is temporarily unavailable. Try again shortly.",
+				RetryAfterSeconds: result.RetryAfterSeconds,
+			}
+		}
 
 		if !result.Allowed {
 			logger.Warn("login proxy blocked request",
@@ -119,32 +129,43 @@ func NewLoginProxy(kratosURL string, service *Service, logger *zap.Logger) http.
 	})
 }
 
-// extractIdentifier tries to parse the identifier from the request body.
-func extractIdentifier(body []byte, contentType string) string {
-	if strings.Contains(contentType, "application/json") {
-		var parsed kratosLoginBody
-		if err := json.Unmarshal(body, &parsed); err == nil && parsed.Identifier != "" {
-			return parsed.Identifier
-		}
-	}
-
-	// Try form-encoded
+// extractLoginBody parses the identifier and the method from the request body:
+// form-encoded when the content type says so, then JSON whatever it says. The
+// method is the one from the parse that yielded the identifier, or else from
+// the first parse that yields a method.
+func extractLoginBody(body []byte, contentType string) (identifier, method string) {
+	var parses []kratosLoginBody
 	if strings.Contains(contentType, "application/x-www-form-urlencoded") {
-		values, err := url.ParseQuery(string(body))
-		if err == nil {
-			if id := values.Get("identifier"); id != "" {
-				return id
-			}
+		if values, err := url.ParseQuery(string(body)); err == nil {
+			parses = append(parses, kratosLoginBody{Identifier: values.Get("identifier"), Method: values.Get("method")})
 		}
 	}
-
-	// Fallback: try JSON even if content-type doesn't say so
 	var parsed kratosLoginBody
-	if err := json.Unmarshal(body, &parsed); err == nil && parsed.Identifier != "" {
-		return parsed.Identifier
+	if err := json.Unmarshal(body, &parsed); err == nil {
+		parses = append(parses, parsed)
 	}
 
-	return ""
+	for _, p := range parses {
+		if p.Identifier != "" {
+			return p.Identifier, p.Method
+		}
+	}
+	for _, p := range parses {
+		if p.Method != "" {
+			return "", p.Method
+		}
+	}
+	return "", ""
+}
+
+// isFirstStep reports whether method is a first sign-in step, which the proxy
+// forwards even when it could not count it.
+func isFirstStep(method string) bool {
+	switch method {
+	case "password", "passkey", "oidc":
+		return true
+	}
+	return false
 }
 
 // isBrowserRequest returns true if the request is from a browser (native form POST)
