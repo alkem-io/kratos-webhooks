@@ -5,12 +5,13 @@
 package kratospasswordchanged
 
 // Payload represents the incoming webhook payload from Kratos, emitted by the
-// jsonnet body template on the `settings.after.password` hook. Fields are
-// snake_case to match the Kratos request body.
+// jsonnet body template on the `settings.after.password` hook and on the
+// `settings.after.{totp,webauthn,lookup_secret}` hooks. Fields are snake_case
+// to match the Kratos request body.
 type Payload struct {
 	// IdentityID is the Kratos identity UUID (required).
 	IdentityID string `json:"identity_id" apispec:"format=uuid"`
-	// FlowID is the Kratos settings flow id (optional). Part of the idempotency key.
+	// FlowID is the Kratos settings flow id (optional), published as sourceFlowId.
 	FlowID string `json:"flow_id,omitempty"`
 	// ObservedAt is when the change was observed (optional, RFC3339). Producer
 	// defaults to publish-time now() (UTC) when Kratos omits it.
