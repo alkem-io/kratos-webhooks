@@ -126,11 +126,11 @@ func NewLoginProxy(kratosURL string, service *Service, logger *zap.Logger) http.
 	})
 }
 
-// readLoginBody returns the identifier and the method of a login submission
-// from the one parse Kratos makes of it, JSON or a form as kratosDecoder picks,
-// and nothing from a body Kratos would not decode. Any second reading would let
-// a crafted body count one identifier, or show one method, while Kratos
-// evaluates another.
+// readLoginBody returns the identifier and the method of a login submission,
+// decoded as JSON or a form as kratosDecoder picks, and nothing from a body
+// Kratos would not decode. Choosing the decoder by Content-Type as Kratos does
+// keeps a header from pointing the count at a decoy; within that decoder the
+// reading is not proven to match Kratos' for every body.
 func readLoginBody(body []byte, contentType string) (identifier, method string) {
 	switch kratosDecoder(contentType) {
 	case "json":
