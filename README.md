@@ -222,11 +222,15 @@ holds only if the edge does not pass a sender's own `X-Forwarded-For` chain
 through.
 
 When the proxy cannot count a submission (Redis error), it reads the body's
-`method`: `password`, `passkey` or `oidc` — a first step — is forwarded
+`method` from the one parse the media type names, as Kratos does: a form for
+`application/x-www-form-urlencoded`, JSON for `application/json`, nothing for
+any other type (a `multipart/form-data` body is not read). The body must carry
+exactly one member named `method`, spelt in lower case; `password`, `passkey`
+or `oidc` — a first step — is forwarded
 uncounted, with the warning `redis error during … backoff check, failing open`
 that an environment alerts on. Any other method, a second step
 (`totp`, `webauthn`, `lookup_secret`) or a body with no readable method
-included, is answered as a locked address is: a browser is redirected to
+(none, several, another letter case, another media type) included, is answered as a locked address is: a browser is redirected to
 `/login?lockout=true&retry_after=<LOGIN_BACKOFF_IP_LOCKOUT_SECONDS>`, an API
 client gets `429` with `error.reason` `unavailable`. While that warning fires,
 no member with a second factor completes a sign-in. A request body that cannot
