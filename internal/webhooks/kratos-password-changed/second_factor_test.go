@@ -129,6 +129,24 @@ func TestPasswordChanged_PublishesNoMethod(t *testing.T) {
 	}
 }
 
+// A skipped method is logged as received, bounded, so a misspelt route in an
+// environment's values shows in the log.
+func TestSecondFactorChanged_LogsTheSkippedMethod(t *testing.T) {
+	core, logs := observer.New(zapcore.DebugLevel)
+	logger := zap.New(core)
+	handler := kratospasswordchanged.NewHandler(kratospasswordchanged.NewService(&mockPublisher{}, logger), logger)
+
+	postSecondFactorChanged(handler, "?method=topt", secondFactorBody)
+	postSecondFactorChanged(handler, "?method="+strings.Repeat("x", 100), secondFactorBody)
+
+	if logs.FilterField(zap.String("factor_method", "topt")).Len() != 1 {
+		t.Error("want the skipped method topt logged")
+	}
+	if logs.FilterField(zap.String("factor_method", strings.Repeat("x", 32))).Len() != 1 {
+		t.Error("want a long method logged truncated to 32 bytes")
+	}
+}
+
 // A factor change is never logged as a password change.
 func TestSecondFactorChanged_LogsNameTheEvent(t *testing.T) {
 	core, logs := observer.New(zapcore.DebugLevel)
