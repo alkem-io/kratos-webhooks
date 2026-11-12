@@ -221,6 +221,9 @@ none), so the after-login hook sees what was counted. The per-IP bound therefore
 holds only if the edge does not pass a sender's own `X-Forwarded-For` chain
 through.
 
+The identifier is read from a JSON or form body whatever the `Content-Type`
+says, so the header cannot take a password step out of the per-identifier count.
+
 When the proxy cannot count a submission (Redis error), it reads the body's
 `method` from the one parse the media type names, as Kratos does: a form for
 `application/x-www-form-urlencoded`, JSON for `application/json`, nothing for
