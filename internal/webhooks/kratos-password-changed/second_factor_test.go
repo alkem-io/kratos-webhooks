@@ -105,11 +105,19 @@ func TestSecondFactorChanged_SkipsWithoutPublishing(t *testing.T) {
 	}
 }
 
+// A failed publish leaves no audit row, so its warning names the factor.
 func TestSecondFactorChanged_PublishFailureReturnsError(t *testing.T) {
+	core, logs := observer.New(zapcore.WarnLevel)
+	logger := zap.New(core)
 	pub := &mockPublisher{err: errors.New("broker unreachable")}
-	resp := postSecondFactorChanged(setupTestHandler(pub), "?method=totp", secondFactorBody)
+	handler := kratospasswordchanged.NewHandler(kratospasswordchanged.NewService(pub, logger), logger)
+
+	resp := postSecondFactorChanged(handler, "?method=totp", secondFactorBody)
 	if resp.Status != kratospasswordchanged.StatusError {
 		t.Errorf("want error, got %q", resp.Status)
+	}
+	if logs.FilterMessageSnippet("publish failed").FilterField(zap.String("factor_method", "totp")).Len() != 1 {
+		t.Error("want the publish failure logged with factor_method totp")
 	}
 }
 
