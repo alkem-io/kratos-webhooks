@@ -69,6 +69,9 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request, eventType, meth
 		zap.String("correlation_id", correlationID),
 		zap.String("event_type", eventType),
 	)
+	if method != "" {
+		log = log.With(zap.String("factor_method", method))
+	}
 
 	log.Info("kratos settings webhook received")
 
