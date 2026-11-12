@@ -221,19 +221,23 @@ none), so the after-login hook sees what was counted. The per-IP bound therefore
 holds only if the edge does not pass a sender's own `X-Forwarded-For` chain
 through.
 
-The identifier is read from a JSON or form body whatever the `Content-Type`
-says, so the header cannot take a password step out of the per-identifier count.
+The proxy reads the identifier and the `method` from one parse of the body,
+chosen as Kratos chooses its decoder: it reads the `Content-Type`'s
+comma-separated parts in order up to the first that does not parse, and decodes
+JSON if any of them is `application/json`, else a form if any is
+`application/x-www-form-urlencoded` or `multipart/form-data` (read with Go's
+own form parser, as Kratos does). Media types match in any letter case. A body
+Kratos would not decode — `text/plain`, no `Content-Type`, JSON that does not
+parse — yields no identifier, and is counted per IP only. The identifier
+counted is therefore the one Kratos evaluates, whatever the header says.
 
-When the proxy cannot count a submission (Redis error), it reads the body's
-`method` from the one parse the media type names, as Kratos does: a form for
-`application/x-www-form-urlencoded`, JSON for `application/json`, nothing for
-any other type (a `multipart/form-data` body is not read). The body must carry
+When the proxy cannot count a submission (Redis error), the body must carry
 exactly one member named `method`, spelt in lower case; `password`, `passkey`
 or `oidc` — a first step — is forwarded
 uncounted, with the warning `redis error during … backoff check, failing open`
 that an environment alerts on. Any other method, a second step
 (`totp`, `webauthn`, `lookup_secret`) or a body with no readable method
-(none, several, another letter case, another media type) included, is answered as a locked address is: a browser is redirected to
+(none, several, another letter case, a body Kratos would not decode) included, is answered as a locked address is: a browser is redirected to
 `/login?lockout=true&retry_after=<LOGIN_BACKOFF_IP_LOCKOUT_SECONDS>`, an API
 client gets `429` with `error.reason` `unavailable`. While that warning fires,
 no member with a second factor completes a sign-in. A request body that cannot

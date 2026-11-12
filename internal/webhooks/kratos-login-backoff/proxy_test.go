@@ -134,6 +134,16 @@ func TestLoginProxy_OverwritesTrueClientIPTowardKratos(t *testing.T) {
 			t.Errorf("want no True-Client-Ip upstream, got %q", up.trueClientIPs)
 		}
 	})
+	t.Run("GET", func(t *testing.T) {
+		proxy, up := newProxy(t, allowedMock())
+		req := httptest.NewRequest(http.MethodGet, "/self-service/login/browser", nil)
+		req.Header.Set("True-Client-Ip", "198.51.100.1")
+		req.Header.Set("X-Forwarded-For", "203.0.113.7")
+		serve(proxy, req)
+		if up.requests != 1 || up.trueClientIPs[0] != "203.0.113.7" {
+			t.Errorf("want True-Client-Ip 203.0.113.7 upstream, got %q", up.trueClientIPs)
+		}
+	})
 }
 
 func TestLoginProxy_GetIsForwardedUncounted(t *testing.T) {
@@ -173,17 +183,17 @@ func TestLoginProxy_UncountedSecondStepIsRefused(t *testing.T) {
 			`{"method":"totp","totp_code":"000000","p":"&method=password&q="}`,
 			"application/json; x=application/x-www-form-urlencoded",
 		},
+		// The whole header does not parse, but its comma-separated parts do and
+		// one is JSON, so Kratos reads JSON.
+		"json listed after a form with a parameter": {
+			`{"method":"totp","totp_code":"000000","p":"&method=password&q="}`,
+			"application/x-www-form-urlencoded; a=b, application/json",
+		},
 		// Decoders disagree on which of several "method" members counts.
 		"method in another case": {`{"method":"totp","totp_code":"000000","METHOD":"password"}`, "application/json"},
 		"method twice":           {`{"method":"totp","totp_code":"000000","method":"password"}`, "application/json"},
 		"form method twice":      {"method=totp&totp_code=000000&method=password", "application/x-www-form-urlencoded"},
-		// The identifier is read leniently; the method is not.
-		"listed content type": {passwordBody, "application/json, text/plain"},
-		// Not read: no Alkemio client posts multipart.
-		"multipart": {
-			"--b\r\nContent-Disposition: form-data; name=\"method\"\r\n\r\npassword\r\n--b--\r\n",
-			"multipart/form-data; boundary=b",
-		},
+		"multipart totp":         {multipartBody("method", "totp"), multipartType},
 	}
 	for name, c := range refused {
 		t.Run(name+"/api", func(t *testing.T) {
@@ -231,6 +241,9 @@ func TestLoginProxy_UncountedFirstStepIsForwarded(t *testing.T) {
 		{"method=password&identifier=a%40b.c&password=x", "application/x-www-form-urlencoded"},
 		{`{"method":"passkey","passkey_login":"{}"}`, "application/json"},
 		{`{"method":"oidc","provider":"x"}`, "application/json"},
+		{passwordBody, "application/json, text/plain"},
+		{"method=password&identifier=a%40b.c&password=x", "Application/X-WWW-Form-Urlencoded"},
+		{multipartBody("method", "password"), multipartType},
 	} {
 		proxy, up := newProxy(t, failingMock())
 		serve(proxy, loginPost(c[0], c[1], nil))
@@ -240,16 +253,34 @@ func TestLoginProxy_UncountedFirstStepIsForwarded(t *testing.T) {
 	}
 }
 
-// The identifier is counted whatever the content type says, a list of types
-// or none included, so the per-identifier bound cannot be stepped round.
-func TestLoginProxy_CountsTheIdentifier(t *testing.T) {
+const multipartType = "multipart/form-data; boundary=b"
+
+func multipartBody(pairs ...string) string {
+	var b strings.Builder
+	for i := 0; i < len(pairs); i += 2 {
+		fmt.Fprintf(&b, "--b\r\nContent-Disposition: form-data; name=%q\r\n\r\n%s\r\n", pairs[i], pairs[i+1])
+	}
+	b.WriteString("--b--\r\n")
+	return b.String()
+}
+
+// The identifier is counted from the body Kratos decodes, as Kratos decodes
+// it, so a Content-Type cannot point the count at one identifier while Kratos
+// evaluates another.
+func TestLoginProxy_CountsTheIdentifierKratosReads(t *testing.T) {
 	for _, c := range [][2]string{
 		{passwordBody, "application/json"},
 		{`{"method":"password","Identifier":"someone@example.org","password":"x"}`, "application/json"},
 		{"method=password&identifier=someone%40example.org&password=x", "application/x-www-form-urlencoded"},
 		{passwordBody, "application/json, text/plain"},
-		{passwordBody, "text/plain"},
-		{"method=password&identifier=someone%40example.org&password=x", "text/plain, application/x-www-form-urlencoded"},
+		{"method=password&identifier=someone%40example.org&password=x", "Application/X-WWW-Form-Urlencoded"},
+		{multipartBody("method", "password", "identifier", "someone@example.org", "password", "x"), multipartType},
+		// A form type whose parameter names JSON: Kratos reads the form, so the
+		// identifier smuggled into a JSON string is the one counted.
+		{
+			`{"identifier":"decoy@example.org","p":"&identifier=someone%40example.org&password=x&method=password&q="}`,
+			`application/x-www-form-urlencoded; x="application/json"`,
+		},
 	} {
 		mock := allowedMock()
 		proxy, _ := newProxy(t, mock)

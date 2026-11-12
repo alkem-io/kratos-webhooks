@@ -23,6 +23,8 @@ type kratosLoginBody struct {
 	Identifier string `json:"identifier"`
 }
 
+const maxLoginRequestBodyBytes int64 = 1 << 20 // 1 MiB
+
 // NewLoginProxy creates an http.Handler that checks login backoff before proxying to Kratos.
 func NewLoginProxy(kratosURL string, service *Service, logger *zap.Logger) http.Handler {
 	target, err := url.Parse(kratosURL)
@@ -32,10 +34,19 @@ func NewLoginProxy(kratosURL string, service *Service, logger *zap.Logger) http.
 
 	proxy := httputil.NewSingleHostReverseProxy(target) //nolint:gosec // target is from trusted config
 
-	const maxLoginRequestBodyBytes int64 = 1 << 20 // 1 MiB
-
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		correlationID := middleware.GetCorrelationID(r.Context())
+
+		// Set True-Client-Ip so Kratos after-login webhooks can access it via ctx.request_headers.
+		// Kratos has a hardcoded header allowlist; True-Client-Ip is on it but X-Forwarded-For is not.
+		// The inbound value is never trusted, whatever the method: Kratos always
+		// sees the address the proxy counts.
+		clientIP := extractClientIP(r)
+		if clientIP != "" {
+			r.Header.Set("True-Client-Ip", clientIP)
+		} else {
+			r.Header.Del("True-Client-Ip")
+		}
 
 		// Only intercept POST requests (credential submissions)
 		if r.Method != http.MethodPost {
@@ -61,9 +72,7 @@ func NewLoginProxy(kratosURL string, service *Service, logger *zap.Logger) http.
 			return
 		}
 
-		contentType := r.Header.Get("Content-Type")
-		identifier := extractIdentifier(bodyBytes, contentType)
-		clientIP := extractClientIP(r)
+		identifier, method := readLoginBody(bodyBytes, r.Header.Get("Content-Type"))
 
 		result := service.CheckAndIncrement(r.Context(), BeforeLoginRequest{
 			Identifier: identifier,
@@ -73,7 +82,7 @@ func NewLoginProxy(kratosURL string, service *Service, logger *zap.Logger) http.
 		// Only a first step goes through uncounted: a second step (or a body
 		// whose method could not be read) is refused rather than guessed at
 		// without a bound. The block below logs it with reason "unavailable".
-		if result.Uncounted && !isFirstStep(extractMethod(bodyBytes, contentType)) {
+		if result.Uncounted && !isFirstStep(method) {
 			result = CheckAndIncrementResult{
 				Reason:            "unavailable",
 				Message:           "Sign-in is temporarily unavailable. Try again shortly.",
@@ -110,15 +119,6 @@ func NewLoginProxy(kratosURL string, service *Service, logger *zap.Logger) http.
 			return
 		}
 
-		// Set True-Client-Ip so Kratos after-login webhooks can access it via ctx.request_headers.
-		// Kratos has a hardcoded header allowlist; True-Client-Ip is on it but X-Forwarded-For is not.
-		// The inbound value is never trusted: Kratos always sees the address that was counted.
-		if clientIP != "" {
-			r.Header.Set("True-Client-Ip", clientIP)
-		} else {
-			r.Header.Del("True-Client-Ip")
-		}
-
 		// Restore body and proxy to Kratos
 		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 		r.ContentLength = int64(len(bodyBytes))
@@ -126,64 +126,64 @@ func NewLoginProxy(kratosURL string, service *Service, logger *zap.Logger) http.
 	})
 }
 
-// extractIdentifier reads the identifier leniently, so it is counted whatever
-// the content type says: JSON when the type mentions it, then a form, then JSON
-// whatever the type.
-func extractIdentifier(body []byte, contentType string) string {
-	if strings.Contains(contentType, "application/json") {
+// readLoginBody returns the identifier and the method of a login submission
+// from the one parse Kratos makes of it, JSON or a form as kratosDecoder picks,
+// and nothing from a body Kratos would not decode. Any second reading would let
+// a crafted body count one identifier, or show one method, while Kratos
+// evaluates another.
+func readLoginBody(body []byte, contentType string) (identifier, method string) {
+	switch kratosDecoder(contentType) {
+	case "json":
 		var parsed kratosLoginBody
-		if err := json.Unmarshal(body, &parsed); err == nil && parsed.Identifier != "" {
-			return parsed.Identifier
+		if err := json.Unmarshal(body, &parsed); err != nil {
+			return "", ""
 		}
-	}
-
-	if strings.Contains(contentType, "application/x-www-form-urlencoded") {
-		values, err := url.ParseQuery(string(body))
-		if err == nil {
-			if id := values.Get("identifier"); id != "" {
-				return id
-			}
+		return parsed.Identifier, soleMethod(jsonMembers(body))
+	case "form":
+		// net/http's own form parser, as Kratos uses it: the whole header picks
+		// urlencoded or multipart, and a partly malformed body keeps the same
+		// values. The memory bound is the body bound, so nothing goes to disk.
+		form := &http.Request{
+			Method: http.MethodPost,
+			Header: http.Header{"Content-Type": {contentType}},
+			Body:   io.NopCloser(bytes.NewReader(body)),
 		}
-	}
-
-	var parsed kratosLoginBody
-	if err := json.Unmarshal(body, &parsed); err == nil && parsed.Identifier != "" {
-		return parsed.Identifier
-	}
-
-	return ""
-}
-
-// extractMethod reads the method strictly, from the one parse the media type
-// names, as Kratos chooses its decoder: a form for
-// application/x-www-form-urlencoded, JSON for application/json, and no method
-// for any other type or for a body that does not parse as its type.
-func extractMethod(body []byte, contentType string) string {
-	mediaType, _, _ := mime.ParseMediaType(contentType)
-	var members []member
-	switch mediaType {
-	case "application/x-www-form-urlencoded":
-		values, err := url.ParseQuery(string(body))
-		if err != nil {
-			return ""
-		}
-		for name, vs := range values {
+		_ = form.ParseMultipartForm(maxLoginRequestBodyBytes)
+		var members []member
+		for name, vs := range form.PostForm {
 			for _, v := range vs {
 				members = append(members, member{name, v})
 			}
 		}
-	case "application/json":
-		if !json.Valid(body) {
-			return ""
-		}
-		members = jsonMembers(body)
+		return form.PostForm.Get("identifier"), soleMethod(members)
 	}
-	return soleMethod(members)
+	return "", ""
+}
+
+// kratosDecoder names the decoder Kratos chooses for a Content-Type: it reads
+// the comma-separated parts in order, stops at the first that does not parse,
+// and takes JSON if any part read is application/json, else a form if any is
+// application/x-www-form-urlencoded or multipart/form-data.
+func kratosDecoder(contentType string) string {
+	decoder := ""
+	for _, part := range strings.Split(contentType, ",") {
+		mediaType, _, err := mime.ParseMediaType(part)
+		if err != nil {
+			break
+		}
+		switch mediaType {
+		case "application/json":
+			return "json"
+		case "application/x-www-form-urlencoded", "multipart/form-data":
+			decoder = "form"
+		}
+	}
+	return decoder
 }
 
 type member struct{ name, value string }
 
-// jsonMembers lists the top-level members of a valid JSON object body, every
+// jsonMembers lists the top-level members of a JSON object body, every
 // occurrence of a name kept; a value that is not a string reads as "".
 func jsonMembers(body []byte) []member {
 	dec := json.NewDecoder(bytes.NewReader(body))
