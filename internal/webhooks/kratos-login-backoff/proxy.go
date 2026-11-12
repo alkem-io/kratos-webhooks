@@ -61,7 +61,8 @@ func NewLoginProxy(kratosURL string, service *Service, logger *zap.Logger) http.
 			return
 		}
 
-		identifier, method := extractLoginBody(bodyBytes, r.Header.Get("Content-Type"))
+		contentType := r.Header.Get("Content-Type")
+		identifier := extractIdentifier(bodyBytes, contentType)
 		clientIP := extractClientIP(r)
 
 		result := service.CheckAndIncrement(r.Context(), BeforeLoginRequest{
@@ -72,7 +73,7 @@ func NewLoginProxy(kratosURL string, service *Service, logger *zap.Logger) http.
 		// Only a first step goes through uncounted: a second step (or a body
 		// whose method could not be read) is refused rather than guessed at
 		// without a bound. The block below logs it with reason "unavailable".
-		if result.Uncounted && !isFirstStep(method) {
+		if result.Uncounted && !isFirstStep(extractMethod(bodyBytes, contentType)) {
 			result = CheckAndIncrementResult{
 				Reason:            "unavailable",
 				Message:           "Sign-in is temporarily unavailable. Try again shortly.",
@@ -125,42 +126,65 @@ func NewLoginProxy(kratosURL string, service *Service, logger *zap.Logger) http.
 	})
 }
 
-// extractLoginBody reads the identifier and the method from the one parse the
-// media type names, as Kratos chooses its decoder: a form for
-// application/x-www-form-urlencoded, JSON for application/json, nothing for
-// any other type. The identifier keeps encoding/json's reading (any letter
-// case, last member wins); the method is read strictly by soleMethod.
-func extractLoginBody(body []byte, contentType string) (identifier, method string) {
+// extractIdentifier reads the identifier leniently, so it is counted whatever
+// the content type says: JSON when the type mentions it, then a form, then JSON
+// whatever the type.
+func extractIdentifier(body []byte, contentType string) string {
+	if strings.Contains(contentType, "application/json") {
+		var parsed kratosLoginBody
+		if err := json.Unmarshal(body, &parsed); err == nil && parsed.Identifier != "" {
+			return parsed.Identifier
+		}
+	}
+
+	if strings.Contains(contentType, "application/x-www-form-urlencoded") {
+		values, err := url.ParseQuery(string(body))
+		if err == nil {
+			if id := values.Get("identifier"); id != "" {
+				return id
+			}
+		}
+	}
+
+	var parsed kratosLoginBody
+	if err := json.Unmarshal(body, &parsed); err == nil && parsed.Identifier != "" {
+		return parsed.Identifier
+	}
+
+	return ""
+}
+
+// extractMethod reads the method strictly, from the one parse the media type
+// names, as Kratos chooses its decoder: a form for
+// application/x-www-form-urlencoded, JSON for application/json, and no method
+// for any other type or for a body that does not parse as its type.
+func extractMethod(body []byte, contentType string) string {
 	mediaType, _, _ := mime.ParseMediaType(contentType)
 	var members []member
 	switch mediaType {
 	case "application/x-www-form-urlencoded":
 		values, err := url.ParseQuery(string(body))
 		if err != nil {
-			return "", ""
+			return ""
 		}
-		identifier = values.Get("identifier")
 		for name, vs := range values {
 			for _, v := range vs {
 				members = append(members, member{name, v})
 			}
 		}
 	case "application/json":
-		var parsed kratosLoginBody
-		if err := json.Unmarshal(body, &parsed); err != nil {
-			return "", ""
+		if !json.Valid(body) {
+			return ""
 		}
-		identifier = parsed.Identifier
 		members = jsonMembers(body)
 	}
-	return identifier, soleMethod(members)
+	return soleMethod(members)
 }
 
 type member struct{ name, value string }
 
-// jsonMembers lists the top-level members of a JSON object body that
-// json.Unmarshal has accepted, every occurrence of a name kept; a value that
-// is not a string reads as "".
+// jsonMembers lists the top-level members of a valid JSON object body, every
+// occurrence of a name kept; a value that is not a string reads as "".
 func jsonMembers(body []byte) []member {
 	dec := json.NewDecoder(bytes.NewReader(body))
 	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {

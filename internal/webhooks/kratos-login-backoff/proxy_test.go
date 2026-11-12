@@ -177,6 +177,8 @@ func TestLoginProxy_UncountedSecondStepIsRefused(t *testing.T) {
 		"method in another case": {`{"method":"totp","totp_code":"000000","METHOD":"password"}`, "application/json"},
 		"method twice":           {`{"method":"totp","totp_code":"000000","method":"password"}`, "application/json"},
 		"form method twice":      {"method=totp&totp_code=000000&method=password", "application/x-www-form-urlencoded"},
+		// The identifier is read leniently; the method is not.
+		"listed content type": {passwordBody, "application/json, text/plain"},
 		// Not read: no Alkemio client posts multipart.
 		"multipart": {
 			"--b\r\nContent-Disposition: form-data; name=\"method\"\r\n\r\npassword\r\n--b--\r\n",
@@ -238,12 +240,16 @@ func TestLoginProxy_UncountedFirstStepIsForwarded(t *testing.T) {
 	}
 }
 
-// The identifier is counted from the parse the media type names.
+// The identifier is counted whatever the content type says, a list of types
+// or none included, so the per-identifier bound cannot be stepped round.
 func TestLoginProxy_CountsTheIdentifier(t *testing.T) {
 	for _, c := range [][2]string{
 		{passwordBody, "application/json"},
 		{`{"method":"password","Identifier":"someone@example.org","password":"x"}`, "application/json"},
 		{"method=password&identifier=someone%40example.org&password=x", "application/x-www-form-urlencoded"},
+		{passwordBody, "application/json, text/plain"},
+		{passwordBody, "text/plain"},
+		{"method=password&identifier=someone%40example.org&password=x", "text/plain, application/x-www-form-urlencoded"},
 	} {
 		mock := allowedMock()
 		proxy, _ := newProxy(t, mock)
