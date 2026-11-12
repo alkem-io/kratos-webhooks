@@ -228,8 +228,11 @@ JSON if any of them is `application/json`, else a form if any is
 `application/x-www-form-urlencoded` or `multipart/form-data` (read with Go's
 own form parser, as Kratos does). Media types match in any letter case. A body
 Kratos would not decode — `text/plain`, no `Content-Type`, JSON that does not
-parse — yields no identifier, and is counted per IP only. The identifier
-counted is therefore the one Kratos evaluates, whatever the header says.
+parse — yields no identifier, and is counted per IP only. So is an identifier
+longer than an email address can be (254 characters). Within the chosen
+decoder, the proxy's reading of the identifier is not proven to match Kratos'
+for every body (a member name in another letter case, for one); where they
+differ, the per-IP bound still applies.
 
 When the proxy cannot count a submission (Redis error), the body must carry
 exactly one member named `method`, spelt in lower case; `password`, `passkey`
