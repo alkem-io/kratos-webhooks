@@ -49,9 +49,11 @@ func (h *Handler) HandleSecondFactorChanged(w http.ResponseWriter, r *http.Reque
 	case "totp", "webauthn", "lookup_secret":
 		h.handle(w, r, EventTypeUserSecondFactorChanged, method)
 	default:
+		const maxLoggedMethodBytes = 32
 		h.logger.Warn("unsupported second-factor method, skipping",
 			zap.String("correlation_id", middleware.GetCorrelationID(r.Context())),
 			zap.String("event_type", EventTypeUserSecondFactorChanged),
+			zap.String("factor_method", method[:min(len(method), maxLoggedMethodBytes)]),
 		)
 		h.respondJSON(w, WebhookResponse{
 			Status:  StatusSkipped,
