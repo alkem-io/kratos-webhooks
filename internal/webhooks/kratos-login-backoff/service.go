@@ -37,6 +37,10 @@ type Service struct {
 // shorter key can be brute-forced from logged pseudonyms and a list of emails.
 const minLogIdentifierHashKeyBytes = 32
 
+// maxIdentifierLength is the longest email address (RFC 5321), the identifier
+// a login names.
+const maxIdentifierLength = 254
+
 // NewService creates a new login backoff service using a concrete RedisClient.
 func NewService(redisClient *clients.RedisClient, cfg *config.Config, logger *zap.Logger) *Service {
 	return NewServiceWithRedis(redisClient, cfg, logger)
@@ -104,6 +108,12 @@ func (s *Service) uncounted() CheckAndIncrementResult {
 func (s *Service) CheckAndIncrement(ctx context.Context, req BeforeLoginRequest, correlationID string) CheckAndIncrementResult {
 	identifier := normaliseIdentifier(req.Identifier)
 	ip := strings.TrimSpace(req.ClientIP)
+
+	// A longer identifier names no account. It is counted per IP only, so a
+	// sender cannot make each submission write a counter key as large as the body.
+	if len(identifier) > maxIdentifierLength {
+		identifier = ""
+	}
 
 	// Neither identifier nor IP provided - fail open
 	if identifier == "" && ip == "" {

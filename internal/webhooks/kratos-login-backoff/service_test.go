@@ -3,6 +3,7 @@ package kratosloginbackoff_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"go.uber.org/zap"
@@ -344,5 +345,38 @@ func TestResetCounters_FailOpenOnRedisError(t *testing.T) {
 
 	if resp.Status != "success" {
 		t.Errorf("expected status=success on Redis error (fail-open), got %s", resp.Status)
+	}
+}
+
+// An identifier no email address can be is counted per IP only, so a sender
+// cannot write an arbitrarily large counter key with each submission.
+func TestCheckAndIncrement_OverlongIdentifier_CountedPerIPOnly(t *testing.T) {
+	mock := &mockRedisHelper{incrementIPResult: [2]int64{1, 120}}
+	svc := newTestService(t, mock)
+
+	result := svc.CheckAndIncrement(context.Background(), kratosloginbackoff.BeforeLoginRequest{
+		Identifier: strings.Repeat("a", 255),
+		ClientIP:   "192.168.1.1",
+	}, "test-corr-id")
+
+	if len(mock.countedIdentifiers) != 0 {
+		t.Errorf("expected no identifier key, got %d", len(mock.countedIdentifiers))
+	}
+	if len(mock.countedIPs) != 1 || mock.countedIPs[0] != "192.168.1.1" {
+		t.Errorf("expected one per-IP count, got %q", mock.countedIPs)
+	}
+	if !result.Allowed || result.IPAttempts != 1 {
+		t.Errorf("expected allowed with one IP attempt, got %+v", result)
+	}
+
+	// The longest real address is still counted per identifier.
+	mock = &mockRedisHelper{incrementBothResult: [4]int64{1, 120, 1, 120}}
+	svc = newTestService(t, mock)
+	svc.CheckAndIncrement(context.Background(), kratosloginbackoff.BeforeLoginRequest{
+		Identifier: strings.Repeat("a", 254),
+		ClientIP:   "192.168.1.1",
+	}, "test-corr-id")
+	if len(mock.countedIdentifiers) != 1 {
+		t.Errorf("expected a 254-character identifier to be counted, got %d", len(mock.countedIdentifiers))
 	}
 }
