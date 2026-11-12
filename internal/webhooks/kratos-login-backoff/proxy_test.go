@@ -257,7 +257,7 @@ const multipartType = "multipart/form-data; boundary=b"
 
 func multipartBody(pairs ...string) string {
 	var b strings.Builder
-	for i := 0; i < len(pairs); i += 2 {
+	for i := 0; i+1 < len(pairs); i += 2 {
 		fmt.Fprintf(&b, "--b\r\nContent-Disposition: form-data; name=%q\r\n\r\n%s\r\n", pairs[i], pairs[i+1])
 	}
 	b.WriteString("--b--\r\n")
