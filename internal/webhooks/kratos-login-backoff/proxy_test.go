@@ -3,6 +3,7 @@ package kratosloginbackoff_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/alkem-io/kratos-webhooks/internal/config"
 	kratosloginbackoff "github.com/alkem-io/kratos-webhooks/internal/webhooks/kratos-login-backoff"
 )
 
@@ -38,10 +40,19 @@ func newUpstream(t *testing.T) *upstream {
 	return u
 }
 
+// The two windows differ so a quoted wait shows which one it is.
+const ipLockoutSeconds = 300
+
 func newProxy(t *testing.T, mock *mockRedisHelper) (http.Handler, *upstream) {
 	t.Helper()
 	up := newUpstream(t)
-	return kratosloginbackoff.NewLoginProxy(up.URL, newTestService(t, mock), zap.NewNop()), up
+	svc := kratosloginbackoff.NewServiceWithRedis(mock, &config.Config{
+		LoginBackoffMaxIdentifierAttempts:    10,
+		LoginBackoffMaxIPAttempts:            20,
+		LoginBackoffIdentifierLockoutSeconds: 120,
+		LoginBackoffIPLockoutSeconds:         ipLockoutSeconds,
+	}, zap.NewNop())
+	return kratosloginbackoff.NewLoginProxy(up.URL, svc, zap.NewNop()), up
 }
 
 func serve(proxy http.Handler, req *http.Request) *httptest.ResponseRecorder {
@@ -153,6 +164,24 @@ func TestLoginProxy_UncountedSecondStepIsRefused(t *testing.T) {
 		"form totp":     {"method=totp&totp_code=000000", "application/x-www-form-urlencoded"},
 		"no method":     {`{"totp_code":"000000"}`, "application/json"},
 		"unparseable":   {"\x00not a body", "text/plain"},
+		// Kratos decodes by media type; the proxy must read the same one parse.
+		"form carrying json": {
+			`{"method":"password","identifier":"a@b.c","password":"x","p":"&method=totp&totp_code=000000&q="}`,
+			"application/x-www-form-urlencoded",
+		},
+		"json carrying form": {
+			`{"method":"totp","totp_code":"000000","p":"&method=password&q="}`,
+			"application/json; x=application/x-www-form-urlencoded",
+		},
+		// Decoders disagree on which of several "method" members counts.
+		"method in another case": {`{"method":"totp","totp_code":"000000","METHOD":"password"}`, "application/json"},
+		"method twice":           {`{"method":"totp","totp_code":"000000","method":"password"}`, "application/json"},
+		"form method twice":      {"method=totp&totp_code=000000&method=password", "application/x-www-form-urlencoded"},
+		// Not read: no Alkemio client posts multipart.
+		"multipart": {
+			"--b\r\nContent-Disposition: form-data; name=\"method\"\r\n\r\npassword\r\n--b--\r\n",
+			"multipart/form-data; boundary=b",
+		},
 	}
 	for name, c := range refused {
 		t.Run(name+"/api", func(t *testing.T) {
@@ -182,7 +211,8 @@ func TestLoginProxy_UncountedSecondStepIsRefused(t *testing.T) {
 			if rec.Code != http.StatusSeeOther {
 				t.Fatalf("want 303, got %d", rec.Code)
 			}
-			if loc := rec.Header().Get("Location"); loc != "/login?lockout=true&retry_after=120" {
+			want := fmt.Sprintf("/login?lockout=true&retry_after=%d", ipLockoutSeconds)
+			if loc := rec.Header().Get("Location"); loc != want {
 				t.Errorf("want redirect quoting the IP window, got %q", loc)
 			}
 			if up.requests != 0 {
@@ -193,15 +223,33 @@ func TestLoginProxy_UncountedSecondStepIsRefused(t *testing.T) {
 }
 
 func TestLoginProxy_UncountedFirstStepIsForwarded(t *testing.T) {
-	for _, body := range []string{
-		passwordBody,
-		`{"method":"passkey","passkey_login":"{}"}`,
-		`{"method":"oidc","provider":"x"}`,
+	for _, c := range [][2]string{
+		{passwordBody, "application/json"},
+		{passwordBody, "application/json; charset=utf-8"},
+		{"method=password&identifier=a%40b.c&password=x", "application/x-www-form-urlencoded"},
+		{`{"method":"passkey","passkey_login":"{}"}`, "application/json"},
+		{`{"method":"oidc","provider":"x"}`, "application/json"},
 	} {
 		proxy, up := newProxy(t, failingMock())
-		serve(proxy, loginPost(body, "application/json", nil))
-		if up.requests != 1 || up.bodies[0] != body {
-			t.Errorf("want %s forwarded intact, upstream saw %q", body, up.bodies)
+		serve(proxy, loginPost(c[0], c[1], nil))
+		if up.requests != 1 || up.bodies[0] != c[0] {
+			t.Errorf("want %s (%s) forwarded intact, upstream saw %q", c[0], c[1], up.bodies)
+		}
+	}
+}
+
+// The identifier is counted from the parse the media type names.
+func TestLoginProxy_CountsTheIdentifier(t *testing.T) {
+	for _, c := range [][2]string{
+		{passwordBody, "application/json"},
+		{`{"method":"password","Identifier":"someone@example.org","password":"x"}`, "application/json"},
+		{"method=password&identifier=someone%40example.org&password=x", "application/x-www-form-urlencoded"},
+	} {
+		mock := allowedMock()
+		proxy, _ := newProxy(t, mock)
+		serve(proxy, loginPost(c[0], c[1], nil))
+		if len(mock.countedIdentifiers) != 1 || mock.countedIdentifiers[0] != "someone@example.org" {
+			t.Errorf("%s (%s): want someone@example.org counted, got %q", c[0], c[1], mock.countedIdentifiers)
 		}
 	}
 }

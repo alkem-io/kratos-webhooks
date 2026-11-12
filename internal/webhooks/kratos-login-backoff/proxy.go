@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -17,10 +18,9 @@ import (
 	"github.com/alkem-io/kratos-webhooks/internal/middleware"
 )
 
-// kratosLoginBody represents the fields we need from a Kratos login POST.
+// kratosLoginBody is the identifier of a Kratos login POST.
 type kratosLoginBody struct {
 	Identifier string `json:"identifier"`
-	Method     string `json:"method"`
 }
 
 // NewLoginProxy creates an http.Handler that checks login backoff before proxying to Kratos.
@@ -125,33 +125,84 @@ func NewLoginProxy(kratosURL string, service *Service, logger *zap.Logger) http.
 	})
 }
 
-// extractLoginBody parses the identifier and the method from the request body:
-// form-encoded when the content type says so, then JSON whatever it says. The
-// method is the one from the parse that yielded the identifier, or else from
-// the first parse that yields a method.
+// extractLoginBody reads the identifier and the method from the one parse the
+// media type names, as Kratos chooses its decoder: a form for
+// application/x-www-form-urlencoded, JSON for application/json, nothing for
+// any other type. The identifier keeps encoding/json's reading (any letter
+// case, last member wins); the method is read strictly by soleMethod.
 func extractLoginBody(body []byte, contentType string) (identifier, method string) {
-	var parses []kratosLoginBody
-	if strings.Contains(contentType, "application/x-www-form-urlencoded") {
-		if values, err := url.ParseQuery(string(body)); err == nil {
-			parses = append(parses, kratosLoginBody{Identifier: values.Get("identifier"), Method: values.Get("method")})
+	mediaType, _, _ := mime.ParseMediaType(contentType)
+	var members []member
+	switch mediaType {
+	case "application/x-www-form-urlencoded":
+		values, err := url.ParseQuery(string(body))
+		if err != nil {
+			return "", ""
 		}
+		identifier = values.Get("identifier")
+		for name, vs := range values {
+			for _, v := range vs {
+				members = append(members, member{name, v})
+			}
+		}
+	case "application/json":
+		var parsed kratosLoginBody
+		if err := json.Unmarshal(body, &parsed); err != nil {
+			return "", ""
+		}
+		identifier = parsed.Identifier
+		members = jsonMembers(body)
 	}
-	var parsed kratosLoginBody
-	if err := json.Unmarshal(body, &parsed); err == nil {
-		parses = append(parses, parsed)
-	}
+	return identifier, soleMethod(members)
+}
 
-	for _, p := range parses {
-		if p.Identifier != "" {
-			return p.Identifier, p.Method
-		}
+type member struct{ name, value string }
+
+// jsonMembers lists the top-level members of a JSON object body that
+// json.Unmarshal has accepted, every occurrence of a name kept; a value that
+// is not a string reads as "".
+func jsonMembers(body []byte) []member {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return nil
 	}
-	for _, p := range parses {
-		if p.Method != "" {
-			return "", p.Method
+	var members []member
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return nil
 		}
+		name, _ := tok.(string)
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
+			return nil
+		}
+		var value string
+		_ = json.Unmarshal(raw, &value)
+		members = append(members, member{name, value})
 	}
-	return "", ""
+	return members
+}
+
+// soleMethod returns the value of the body's one member named "method". A
+// body with no such member, with more than one in any letter case, or with
+// one spelt in another case reads as no method: decoders disagree on which of
+// those members counts, so the proxy does not guess.
+func soleMethod(members []member) string {
+	method, found := "", 0
+	for _, m := range members {
+		if !strings.EqualFold(m.name, "method") {
+			continue
+		}
+		if m.name != "method" {
+			return ""
+		}
+		method, found = m.value, found+1
+	}
+	if found != 1 {
+		return ""
+	}
+	return method
 }
 
 // isFirstStep reports whether method is a first sign-in step, which the proxy
