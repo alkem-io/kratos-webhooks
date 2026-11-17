@@ -150,18 +150,12 @@ func (c *RedisClient) IncrementIPAttempt(ctx context.Context, ip string, ttlSeco
 	return result[0], result[1], nil
 }
 
-// ResetLoginAttempts deletes identifier and/or IP login attempt counter keys.
-// Empty identifier or ip values are skipped to avoid deleting bare prefix keys.
-func (c *RedisClient) ResetLoginAttempts(ctx context.Context, identifier, ip string) error {
-	keys := make([]string, 0, 2)
-	if identifier != "" {
-		keys = append(keys, LoginBackoffIdentifierPrefix+identifier)
-	}
-	if ip != "" {
-		keys = append(keys, LoginBackoffIPPrefix+ip)
-	}
-	if len(keys) == 0 {
+// ResetLoginAttempts deletes the identifier login attempt counter. A per-IP
+// counter is never deleted; it lapses with its window. An empty identifier is
+// skipped to avoid deleting the bare prefix key.
+func (c *RedisClient) ResetLoginAttempts(ctx context.Context, identifier string) error {
+	if identifier == "" {
 		return nil
 	}
-	return c.client.Del(ctx, keys...).Err()
+	return c.client.Del(ctx, LoginBackoffIdentifierPrefix+identifier).Err()
 }

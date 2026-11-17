@@ -70,8 +70,10 @@ spec:
               value: "http://kratos-public"
             - name: LOGIN_BACKOFF_MAX_IDENTIFIER_ATTEMPTS
               value: "10"
+            # Non-production stacks allow 300: test harnesses sign every persona
+            # in from one address, and a success never resets the per-IP counter.
             - name: LOGIN_BACKOFF_MAX_IP_ATTEMPTS
-              value: "20"
+              value: "300"
             - name: LOGIN_BACKOFF_IDENTIFIER_LOCKOUT_SECONDS
               value: "120"
             - name: LOGIN_BACKOFF_IP_LOCKOUT_SECONDS
