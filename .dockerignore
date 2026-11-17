@@ -42,3 +42,6 @@ test/
 # Claude/Specify
 .claude/
 .specify/
+
+# Private local verification artifacts
+.forge-evidence/

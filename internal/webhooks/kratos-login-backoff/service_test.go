@@ -3,6 +3,7 @@ package kratosloginbackoff_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"go.uber.org/zap"
@@ -22,10 +23,18 @@ type mockRedisHelper struct {
 	incrementIPResult [2]int64
 	incrementIPErr    error
 
-	resetErr error
+	resetErr   error
+	resetCalls []string
+
+	// countedIPs records the address of every per-IP increment.
+	countedIPs []string
+	// countedIdentifiers records the identifier of every two-key increment.
+	countedIdentifiers []string
 }
 
-func (m *mockRedisHelper) IncrementLoginAttempts(_ context.Context, _, _ string, _, _ int) (int64, int64, int64, int64, error) {
+func (m *mockRedisHelper) IncrementLoginAttempts(_ context.Context, identifier, ip string, _, _ int) (int64, int64, int64, int64, error) {
+	m.countedIPs = append(m.countedIPs, ip)
+	m.countedIdentifiers = append(m.countedIdentifiers, identifier)
 	if m.incrementBothErr != nil {
 		return 0, 0, 0, 0, m.incrementBothErr
 	}
@@ -39,14 +48,16 @@ func (m *mockRedisHelper) IncrementIdentifierAttempt(_ context.Context, _ string
 	return m.incrementIDResult[0], m.incrementIDResult[1], nil
 }
 
-func (m *mockRedisHelper) IncrementIPAttempt(_ context.Context, _ string, _ int) (int64, int64, error) {
+func (m *mockRedisHelper) IncrementIPAttempt(_ context.Context, ip string, _ int) (int64, int64, error) {
+	m.countedIPs = append(m.countedIPs, ip)
 	if m.incrementIPErr != nil {
 		return 0, 0, m.incrementIPErr
 	}
 	return m.incrementIPResult[0], m.incrementIPResult[1], nil
 }
 
-func (m *mockRedisHelper) ResetLoginAttempts(_ context.Context, _, _ string) error {
+func (m *mockRedisHelper) ResetLoginAttempts(_ context.Context, identifier string) error {
+	m.resetCalls = append(m.resetCalls, identifier)
 	return m.resetErr
 }
 
@@ -153,12 +164,15 @@ func TestCheckAndIncrement_LockoutPrecedence_IdentifierLonger(t *testing.T) {
 	}
 }
 
-func TestResetCounters_ClearsBothKeys(t *testing.T) {
+// A successful login clears the identifier's counter and never the per-IP one:
+// the IP counter lapses with its window, so a login cannot reopen its address's
+// budget for further second-step guesses.
+func TestResetCounters_ClearsIdentifierOnly(t *testing.T) {
 	mock := &mockRedisHelper{}
 	svc := newTestService(t, mock)
 
 	resp := svc.ResetCounters(context.Background(), kratosloginbackoff.AfterLoginRequest{
-		Email:    "user@example.com",
+		Email:    "User@Example.com",
 		ClientIP: "192.168.1.1",
 	}, "test-corr-id")
 
@@ -167,6 +181,25 @@ func TestResetCounters_ClearsBothKeys(t *testing.T) {
 	}
 	if resp.Message != "counters reset" {
 		t.Errorf("expected message='counters reset', got %s", resp.Message)
+	}
+	if len(mock.resetCalls) != 1 || mock.resetCalls[0] != "user@example.com" {
+		t.Errorf("expected one reset for the normalised identifier, got %q", mock.resetCalls)
+	}
+}
+
+func TestResetCounters_IPOnly_Skipped(t *testing.T) {
+	mock := &mockRedisHelper{}
+	svc := newTestService(t, mock)
+
+	resp := svc.ResetCounters(context.Background(), kratosloginbackoff.AfterLoginRequest{
+		ClientIP: "192.168.1.1",
+	}, "test-corr-id")
+
+	if resp.Status != "skipped" {
+		t.Errorf("expected status=skipped, got %s", resp.Status)
+	}
+	if len(mock.resetCalls) != 0 {
+		t.Errorf("expected no reset call, got %q", mock.resetCalls)
 	}
 }
 
@@ -183,6 +216,52 @@ func TestCheckAndIncrement_FailOpenOnRedisError(t *testing.T) {
 
 	if !result.Allowed {
 		t.Error("expected fail-open (allowed=true) on Redis error")
+	}
+}
+
+// Every arm that lets a submission through without counting it says so, and
+// quotes the IP window as the wait.
+func TestCheckAndIncrement_UncountedArms(t *testing.T) {
+	redisErr := errors.New("redis connection refused")
+	cases := map[string]kratosloginbackoff.BeforeLoginRequest{
+		"both":            {Identifier: "user@example.com", ClientIP: "192.168.1.1"},
+		"identifier_only": {Identifier: "user@example.com"},
+		"ip_only":         {ClientIP: "192.168.1.1"},
+		"neither":         {},
+	}
+	for name, req := range cases {
+		t.Run(name, func(t *testing.T) {
+			mock := &mockRedisHelper{incrementBothErr: redisErr, incrementIDErr: redisErr, incrementIPErr: redisErr}
+			cfg := &config.Config{
+				LoginBackoffMaxIdentifierAttempts:    10,
+				LoginBackoffMaxIPAttempts:            20,
+				LoginBackoffIdentifierLockoutSeconds: 120,
+				LoginBackoffIPLockoutSeconds:         300,
+			}
+			svc := kratosloginbackoff.NewServiceWithRedis(mock, cfg, zap.NewNop())
+
+			result := svc.CheckAndIncrement(context.Background(), req, "test-corr-id")
+
+			if !result.Allowed || !result.Uncounted {
+				t.Errorf("want allowed and uncounted, got %+v", result)
+			}
+			if result.RetryAfterSeconds != 300 {
+				t.Errorf("want retry_after = the IP window (300), got %d", result.RetryAfterSeconds)
+			}
+		})
+	}
+}
+
+func TestCheckAndIncrement_CountedIsNotUncounted(t *testing.T) {
+	svc := newTestService(t, &mockRedisHelper{incrementBothResult: [4]int64{1, 120, 1, 120}})
+
+	result := svc.CheckAndIncrement(context.Background(), kratosloginbackoff.BeforeLoginRequest{
+		Identifier: "user@example.com",
+		ClientIP:   "192.168.1.1",
+	}, "test-corr-id")
+
+	if !result.Allowed || result.Uncounted {
+		t.Errorf("want allowed and counted, got %+v", result)
 	}
 }
 
@@ -266,5 +345,38 @@ func TestResetCounters_FailOpenOnRedisError(t *testing.T) {
 
 	if resp.Status != "success" {
 		t.Errorf("expected status=success on Redis error (fail-open), got %s", resp.Status)
+	}
+}
+
+// An identifier no email address can be is counted per IP only, so a sender
+// cannot write an arbitrarily large counter key with each submission.
+func TestCheckAndIncrement_OverlongIdentifier_CountedPerIPOnly(t *testing.T) {
+	mock := &mockRedisHelper{incrementIPResult: [2]int64{1, 120}}
+	svc := newTestService(t, mock)
+
+	result := svc.CheckAndIncrement(context.Background(), kratosloginbackoff.BeforeLoginRequest{
+		Identifier: strings.Repeat("a", 255),
+		ClientIP:   "192.168.1.1",
+	}, "test-corr-id")
+
+	if len(mock.countedIdentifiers) != 0 {
+		t.Errorf("expected no identifier key, got %d", len(mock.countedIdentifiers))
+	}
+	if len(mock.countedIPs) != 1 || mock.countedIPs[0] != "192.168.1.1" {
+		t.Errorf("expected one per-IP count, got %q", mock.countedIPs)
+	}
+	if !result.Allowed || result.IPAttempts != 1 {
+		t.Errorf("expected allowed with one IP attempt, got %+v", result)
+	}
+
+	// The longest real address is still counted per identifier.
+	mock = &mockRedisHelper{incrementBothResult: [4]int64{1, 120, 1, 120}}
+	svc = newTestService(t, mock)
+	svc.CheckAndIncrement(context.Background(), kratosloginbackoff.BeforeLoginRequest{
+		Identifier: strings.Repeat("a", 254),
+		ClientIP:   "192.168.1.1",
+	}, "test-corr-id")
+	if len(mock.countedIdentifiers) != 1 {
+		t.Errorf("expected a 254-character identifier to be counted, got %d", len(mock.countedIdentifiers))
 	}
 }
